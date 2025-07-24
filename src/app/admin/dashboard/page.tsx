@@ -914,7 +914,6 @@ export default function AdminDashboard() {
         .from("daily_metrics")
         .select("*")
         .eq('date', date)
-        .eq('user_id', profile?.id)
         .single();
       
       if (error && error.code !== 'PGRST116') { // PGRST116 is "not found"
