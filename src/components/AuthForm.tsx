@@ -29,41 +29,45 @@ export default function AuthForm() {
     await supabase.auth.signOut();
   };
 
-  if (loading) return <div>Loading...</div>;
+  if (loading) return <div className="flex justify-center items-center text-gray-400">Loading...</div>;
   if (user) return (
-    <div>
-      <p>Signed in as {user.email}</p>
-      <button onClick={handleSignOut} className="px-4 py-2 bg-gray-800 text-white rounded">Sign out</button>
+    <div className="bg-[#23232a]/90 backdrop-blur-sm rounded-xl p-6 text-center max-w-sm mx-auto shadow-2xl border border-gray-700/50">
+      <p className="text-white mb-4 drop-shadow-md">Signed in as <span className="font-semibold">{user.email}</span></p>
+      <button onClick={handleSignOut} className="px-6 py-2 bg-white text-black rounded-lg hover:bg-gray-200 transition-colors font-semibold shadow-lg">
+        Sign out
+      </button>
     </div>
   );
 
   return (
-    <form onSubmit={handleAuth} className="space-y-4 max-w-sm mx-auto">
-      <h2 className="text-xl font-bold">{isSignUp ? "Sign Up" : "Sign In"}</h2>
-      <input
-        type="email"
-        placeholder="Email"
-        value={email}
-        onChange={e => setEmail(e.target.value)}
-        required
-        className="w-full px-3 py-2 border rounded"
-      />
-      <input
-        type="password"
-        placeholder="Password"
-        value={password}
-        onChange={e => setPassword(e.target.value)}
-        required
-        className="w-full px-3 py-2 border rounded"
-      />
-      {error && <div className="text-red-600">{error}</div>}
-      {message && <div className="text-green-600">{message}</div>}
-      <button type="submit" className="w-full px-4 py-2 bg-gray-800 text-white rounded">
-        {isSignUp ? "Sign Up" : "Sign In"}
-      </button>
-      <button type="button" onClick={() => setIsSignUp(!isSignUp)} className="text-blue-600 underline">
-        {isSignUp ? "Already have an account? Sign In" : "Need an account? Sign Up"}
-      </button>
-    </form>
+    <div className="bg-[#23232a]/90 backdrop-blur-sm rounded-xl p-8 max-w-sm mx-auto shadow-2xl border border-gray-700/50">
+      <h2 className="text-2xl font-bold text-white mb-6 text-center drop-shadow-lg">{isSignUp ? "Sign Up" : "Sign In"}</h2>
+      <form onSubmit={handleAuth} className="space-y-4">
+        <input
+          type="email"
+          placeholder="Email"
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          required
+          className="w-full px-4 py-3 bg-[#18181b] text-white border border-gray-700 rounded-lg focus:outline-none focus:border-purple-500 placeholder-gray-400"
+        />
+        <input
+          type="password"
+          placeholder="Password"
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+          required
+          className="w-full px-4 py-3 bg-[#18181b] text-white border border-gray-700 rounded-lg focus:outline-none focus:border-purple-500 placeholder-gray-400"
+        />
+        {error && <div className="text-red-400 text-sm">{error}</div>}
+        {message && <div className="text-green-400 text-sm">{message}</div>}
+        <button type="submit" className="w-full px-4 py-3 bg-white text-black rounded-lg hover:bg-gray-200 transition-colors font-semibold">
+          {isSignUp ? "Sign Up" : "Sign In"}
+        </button>
+        <button type="button" onClick={() => setIsSignUp(!isSignUp)} className="w-full text-purple-400 hover:text-purple-300 transition-colors underline">
+          {isSignUp ? "Already have an account? Sign In" : "Need an account? Sign Up"}
+        </button>
+      </form>
+    </div>
   );
 }
