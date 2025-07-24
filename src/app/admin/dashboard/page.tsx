@@ -873,6 +873,7 @@ export default function AdminDashboard() {
       const { error } = await supabase
         .from("daily_metrics")
         .delete()
+        .eq('user_id', profile?.id)
         .eq('date', dateToDelete);
       
       if (error) {
@@ -913,26 +914,25 @@ export default function AdminDashboard() {
         .from("daily_metrics")
         .select("*")
         .eq('date', date)
-        .order('updated_at', { ascending: false })
-        .limit(1);
+        .eq('user_id', profile?.id)
+        .single();
       
-      if (error) {
+      if (error && error.code !== 'PGRST116') { // PGRST116 is "not found"
         console.error("Error loading metrics:", error);
         alert(`Error loading metrics: ${error.message}`);
         return;
       }
       
-      if (data && data.length > 0) {
-        const metrics_data = data[0];
+      if (data) {
         setMetrics({
-          dailyRevenue: metrics_data.daily_revenue || 0,
-          avgOrderValue: metrics_data.avg_order_value || 0,
-          foodCostPercent: metrics_data.food_cost_percent || 0,
-          laborCostPercent: metrics_data.labor_cost_percent || 0,
-          dailyCovers: metrics_data.daily_covers || 0,
-          tableTurnover: metrics_data.table_turnover || 0,
-          reservationRate: metrics_data.reservation_rate || 0,
-          wastePercent: metrics_data.waste_percent || 0,
+          dailyRevenue: data.daily_revenue || 0,
+          avgOrderValue: data.avg_order_value || 0,
+          foodCostPercent: data.food_cost_percent || 0,
+          laborCostPercent: data.labor_cost_percent || 0,
+          dailyCovers: data.daily_covers || 0,
+          tableTurnover: data.table_turnover || 0,
+          reservationRate: data.reservation_rate || 0,
+          wastePercent: data.waste_percent || 0,
         });
       } else {
         // Clear metrics if no data found for this date
