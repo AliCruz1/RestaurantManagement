@@ -19,9 +19,16 @@ CREATE TABLE IF NOT EXISTS public.daily_metrics (
 -- Enable Row Level Security
 ALTER TABLE public.daily_metrics ENABLE ROW LEVEL SECURITY;
 
--- Create RLS policy so users can only access their own metrics
-CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
-  FOR ALL USING (auth.uid() = user_id);
+-- Create RLS policy so users can only access their own metrics, BUT admins can see all metrics
+DROP POLICY IF EXISTS "Users can manage their own metrics" ON public.daily_metrics;
+
+CREATE POLICY "Users can manage metrics based on role" ON public.daily_metrics
+  FOR ALL USING (
+    auth.uid() = user_id OR 
+    (auth.uid() IN (
+      SELECT id FROM public.profiles WHERE role = 'admin'
+    ))
+  );
 
 -- Create an index for better performance
 CREATE INDEX IF NOT EXISTS idx_daily_metrics_user_date ON public.daily_metrics(user_id, date);
