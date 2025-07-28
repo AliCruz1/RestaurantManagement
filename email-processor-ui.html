@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HostMate Email Processor - Deno Local</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+        .container {
+            background: rgba(255,255,255,0.1);
+            padding: 30px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+        .status {
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            font-weight: bold;
+        }
+        .success { background: rgba(34, 197, 94, 0.3); border: 1px solid #22c55e; }
+        .error { background: rgba(239, 68, 68, 0.3); border: 1px solid #ef4444; }
+        .info { background: rgba(59, 130, 246, 0.3); border: 1px solid #3b82f6; }
+        button {
+            background: linear-gradient(45deg, #22c55e, #16a34a);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            width: 100%;
+            margin: 10px 0;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+        }
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 20px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 10px;
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .links {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .links a {
+            display: block;
+            padding: 15px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            text-decoration: none;
+            color: white;
+            text-align: center;
+            font-weight: bold;
+            transition: transform 0.2s;
+        }
+        .links a:hover {
+            transform: translateY(-2px);
+            background: rgba(255,255,255,0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 HostMate Email Processor</h1>
+        <div class="info status">
+            📧 Deno Email Processor running locally on port 8000<br>
+            🔗 Connected to Supabase database<br>
+            ⚡ Ready to process email queue
+        </div>
+        
+        <button onclick="processEmails()" id="processBtn">
+            📨 Process Email Queue
+        </button>
+        
+        <button onclick="checkStatus()" id="statusBtn">
+            📊 Check System Status
+        </button>
+        
+        <div class="links">
+            <a href="http://localhost:3001" target="_blank">
+                🏠 Main App (Next.js)
+            </a>
+            <a href="http://localhost:3001/admin/dashboard" target="_blank">
+                👑 Admin Dashboard
+            </a>
+        </div>
+        
+        <div id="result" class="result" style="display: none;"></div>
+    </div>
+
+    <script>
+        async function processEmails() {
+            const btn = document.getElementById('processBtn');
+            const result = document.getElementById('result');
+            
+            btn.disabled = true;
+            btn.textContent = '🔄 Processing...';
+            result.style.display = 'block';
+            result.textContent = 'Processing email queue...\n';
+            
+            try {
+                const response = await fetch('http://localhost:8000', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    result.className = 'result success';
+                    result.textContent = `✅ SUCCESS!\n\n${JSON.stringify(data, null, 2)}`;
+                } else {
+                    result.className = 'result error';
+                    result.textContent = `❌ ERROR!\n\n${JSON.stringify(data, null, 2)}`;
+                }
+            } catch (error) {
+                result.className = 'result error';
+                result.textContent = `❌ FETCH ERROR!\n\n${error.message}`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '📨 Process Email Queue';
+            }
+        }
+        
+        async function checkStatus() {
+            const btn = document.getElementById('statusBtn');
+            const result = document.getElementById('result');
+            
+            btn.disabled = true;
+            btn.textContent = '🔄 Checking...';
+            result.style.display = 'block';
+            result.textContent = 'Checking system status...\n';
+            
+            try {
+                const response = await fetch('http://localhost:8000');
+                const data = await response.json();
+                
+                result.className = 'result info';
+                result.textContent = `📊 SYSTEM STATUS\n\n${JSON.stringify(data, null, 2)}`;
+            } catch (error) {
+                result.className = 'result error';
+                result.textContent = `❌ STATUS CHECK FAILED!\n\n${error.message}`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '📊 Check System Status';
+            }
+        }
+        
+        // Auto-check status on load
+        window.onload = checkStatus;
+    </script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "folders": [
+    {
+      "name": "HostMate (Next.js)",
+      "path": "."
+    },
+    {
+      "name": "Supabase Functions (Deno)",
+      "path": "./supabase/functions"
+    }
+  ],
+  "settings": {
+    "deno.enable": false,
+    "typescript.preferences.includePackageJsonAutoImports": "on",
+    "[typescript]": {
+      "editor.defaultFormatter": "vscode.typescript-language-features"
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "denoland.vscode-deno",
+      "bradlc.vscode-tailwindcss",
+      "ms-vscode.vscode-typescript-next"
+    ]
+  }
+}

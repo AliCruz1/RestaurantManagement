@@ -17,13 +17,22 @@ export default function AnalyticsPage() {
   const timestamp = new Date().toLocaleString();
 
   useEffect(() => {
-    if (!profileLoading && profile?.role === "admin") {
-      supabase.rpc('get_reservations_per_day')
-        .then(({ data, error }) => {
+    const fetchAnalytics = async () => {
+      setLoading(true);
+      if (profile?.role === 'admin') {
+        try {
+          const { data, error } = await supabase.rpc('get_reservations_per_day');
+          if (error) throw error;
           setData(data);
-          setLoading(false);
-          setRpcError(error ? JSON.stringify(error) : null);
-        });
+        } catch (err: any) {
+          setRpcError(err.message || JSON.stringify(err));
+        }
+      }
+      setLoading(false);
+    };
+
+    if (!profileLoading) {
+      fetchAnalytics();
       setEffectRan(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

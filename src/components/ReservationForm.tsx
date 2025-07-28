@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/lib/authContext";
 
@@ -14,8 +14,14 @@ export default function ReservationForm() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
+  // Pre-fill fields for authenticated users
+  useEffect(() => {
+    if (user && user.email) {
+      setEmail(user.email);
+    }
+  }, [user]);
+
   if (loading) return <div className="flex justify-center items-center text-gray-400">Loading...</div>;
-  if (!user) return <div className="text-center text-gray-400 bg-[#23232a] rounded-xl p-6 max-w-sm mx-auto">Please sign in to make a reservation.</div>;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,6 +36,7 @@ export default function ReservationForm() {
       setError("Please enter your name, email, and phone.");
       return;
     }
+    
     const { data: tables, error: tableError } = await supabase
       .from("tables")
       .select("id, capacity")
@@ -39,21 +46,93 @@ export default function ReservationForm() {
       setError("No available table for this party size.");
       return;
     }
+    
     const tableId = tables[0].id;
-    const { error: resError } = await supabase.from("reservations").insert([
-      {
+    
+    // Create reservation object for both guest and authenticated users
+    const reservationData = {
+      table_id: tableId,
+      datetime: datetime.toISOString(),
+      party_size: partySize,
+      status: "pending",
+      // For authenticated users: use user_id and keep existing name/email/phone fields
+      // For guests: use guest_* fields and set user_id to null
+      ...(user ? {
         user_id: user.id,
-        table_id: tableId,
-        datetime: datetime.toISOString(),
-        party_size: partySize,
         name,
         email,
         phone,
-        status: "pending",
-      },
-    ]);
-    if (resError) setError(resError.message);
-    else setStatus("Reservation requested! You'll receive a confirmation soon.");
+      } : {
+        user_id: null,
+        guest_name: name,
+        guest_email: email,
+        guest_phone: phone,
+      })
+    };
+    
+    const { data: insertedData, error: resError } = await supabase
+      .from("reservations")
+      .insert([reservationData])
+      .select(`
+        id,
+        name,
+        email,
+        phone,
+        party_size,
+        datetime,
+        status,
+        user_id,
+        guest_name,
+        guest_email,
+        guest_phone,
+        reservation_token
+      `);
+    
+    if (resError) {
+      setError(resError.message);
+    } else if (insertedData && insertedData[0]) {
+      const createdReservation = insertedData[0];
+      
+      // Process reservation for email
+      const emailReservation = {
+        ...createdReservation,
+        displayName: createdReservation.user_id ? createdReservation.name : createdReservation.guest_name,
+        displayEmail: createdReservation.user_id ? createdReservation.email : createdReservation.guest_email,
+        displayPhone: createdReservation.user_id ? createdReservation.phone : createdReservation.guest_phone,
+        isGuest: !createdReservation.user_id
+      };
+      
+      // Send confirmation email
+      try {
+        const emailResponse = await fetch('/api/send-email', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            reservation: emailReservation,
+            type: 'confirmation'
+          }),
+        });
+        
+        if (emailResponse.ok) {
+          setStatus(`Reservation created successfully! Check your email (${emailReservation.displayEmail}) for confirmation details and reservation ID: ${createdReservation.reservation_token.slice(-8)}`);
+        } else {
+          setStatus("Reservation created successfully! However, we couldn't send the confirmation email. Please save this reservation ID: " + createdReservation.reservation_token.slice(-8));
+        }
+      } catch (emailError) {
+        console.error("Email sending failed:", emailError);
+        setStatus("Reservation created successfully! However, we couldn't send the confirmation email. Please save this reservation ID: " + createdReservation.reservation_token.slice(-8));
+      }
+      
+      // Clear form after successful submission
+      setDate("");
+      setTime("");
+      setPartySize(1);
+      setName("");
+      if (!user) setEmail(""); // Only clear email for guests
+      setPhone("");
+    }
   };
 
   return (
@@ -141,6 +220,14 @@ export default function ReservationForm() {
           Reserve Table
         </button>
       </form>
+      
+      {!user && (
+        <div className="mt-6 p-4 bg-purple-900/20 border border-purple-500/30 rounded-lg">
+          <p className="text-sm text-purple-200 text-center">
+            💡 <strong>Tip:</strong> Sign in to manage your reservations easily and save time on future bookings!
+          </p>
+        </div>
+      )}
     </div>
   );
 }

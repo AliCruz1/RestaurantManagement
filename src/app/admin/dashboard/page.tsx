@@ -2,13 +2,13 @@
 "use client";
 import { useAuth } from "@/lib/authContext";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Bar, Line } from "react-chartjs-2";
 import { Chart, CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend } from "chart.js";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HomeIcon, UserGroupIcon, ChartBarIcon, Cog6ToothIcon, BuildingStorefrontIcon, CircleStackIcon } from "@heroicons/react/24/outline";
+import { HomeIcon, UserGroupIcon, ChartBarIcon, Cog6ToothIcon, BuildingStorefrontIcon, CircleStackIcon, ServerStackIcon, CheckCircleIcon, XCircleIcon, ClockIcon, QuestionMarkCircleIcon, UserIcon, LockClosedIcon } from "@heroicons/react/24/outline";
 
 Chart.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend);
 
@@ -111,6 +111,181 @@ export default function AdminDashboard() {
       setSettingsSaving(false);
     }
   };
+
+  // ERD Drag and Drop Handlers
+  const handleMouseDown = (tableId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    setDragging(tableId);
+    
+    // Get the ERD container bounds consistently
+    const container = erdContainerRef.current;
+    if (!container) return;
+    
+    const containerRect = container.getBoundingClientRect();
+    
+    // Get the table's current position
+    const currentPosition = tablePositions[tableId as keyof typeof tablePositions] || { top: 100, left: 100 };
+    
+    // Calculate mouse position relative to container
+    const mouseX = e.clientX - containerRect.left;
+    const mouseY = e.clientY - containerRect.top;
+    
+    // Calculate offset from mouse to table's top-left corner
+    setDragOffset({
+      x: mouseX - currentPosition.left,
+      y: mouseY - currentPosition.top
+    });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!dragging) return;
+    
+    // Get ERD container bounds consistently
+    const container = erdContainerRef.current;
+    if (!container) return;
+    
+    const containerRect = container.getBoundingClientRect();
+    
+    // Calculate mouse position relative to the container
+    const mouseX = e.clientX - containerRect.left;
+    const mouseY = e.clientY - containerRect.top;
+    
+    // Calculate new position using the offset
+    const newX = mouseX - dragOffset.x;
+    const newY = mouseY - dragOffset.y;
+    
+    // Keep tables within bounds
+    const boundedX = Math.max(0, Math.min(newX, containerRect.width - 260));
+    const boundedY = Math.max(0, Math.min(newY, containerRect.height - 200));
+    
+    // Update positions immediately for smooth dragging
+    setTablePositions(prev => ({
+      ...prev,
+      [dragging]: { left: boundedX, top: boundedY }
+    }));
+  };
+
+  const handleMouseUp = () => {
+    setDragging(null);
+    setDragOffset({ x: 0, y: 0 });
+  };
+
+  // Calculate dynamic arrow positions based on table positions
+  const getArrowCoordinates = () => {
+    const { users, profiles, tables, reservations, daily_metrics } = tablePositions;
+    
+    return {
+      usersToProfiles: {
+        x1: users.left + 200, // right edge of users table
+        y1: users.top + 50,   // middle of users table
+        x2: profiles.left,    // left edge of profiles table
+        y2: profiles.top + 50 // middle of profiles table
+      },
+      usersToReservations: {
+        x1: users.left + 100, // center of users table
+        y1: users.top + 100,  // bottom of users table
+        x2: reservations.left + 50, // left side of reservations table
+        y2: reservations.top  // top of reservations table
+      },
+      usersToMetrics: {
+        x1: users.left + 50,  // center of users table
+        y1: users.top + 100,  // bottom of users table
+        x2: daily_metrics.left + 130, // center of metrics table
+        y2: daily_metrics.top // top of metrics table
+      },
+      tablesToReservations: {
+        x1: tables.left,      // left edge of tables table
+        y1: tables.top + 90,  // bottom of tables table
+        x2: reservations.left + 240, // right edge of reservations table
+        y2: reservations.top  // top of reservations table
+      }
+    };
+  };
+
+  // Schema editing functions
+  const handleTableDoubleClick = (tableId: string) => {
+    setEditingTable(tableId);
+  };
+
+  const updateTableName = (tableId: string, newName: string) => {
+    setSchemaData(prev => ({
+      ...prev,
+      [tableId]: {
+        ...(prev as any)[tableId],
+        name: newName
+      }
+    }));
+  };
+
+  const addField = (tableId: string) => {
+    setSchemaData(prev => ({
+      ...prev,
+      [tableId]: {
+        ...(prev as any)[tableId],
+        fields: [
+          ...(prev as any)[tableId].fields,
+          { name: 'new_field', type: 'VARCHAR', isPrimary: false, isForeign: false }
+        ]
+      }
+    }));
+  };
+
+  const updateField = (tableId: string, fieldIndex: number, updates: any) => {
+    setSchemaData(prev => ({
+      ...prev,
+      [tableId]: {
+        ...(prev as any)[tableId],
+        fields: (prev as any)[tableId].fields.map((field: any, index: number) => 
+          index === fieldIndex ? { ...field, ...updates } : field
+        )
+      }
+    }));
+  };
+
+  const removeField = (tableId: string, fieldIndex: number) => {
+    setSchemaData(prev => ({
+      ...prev,
+      [tableId]: {
+        ...(prev as any)[tableId],
+        fields: (prev as any)[tableId].fields.filter((_: any, index: number) => index !== fieldIndex)
+      }
+    }));
+  };
+
+  const addTable = () => {
+    const newTableId = `table_${Date.now()}`;
+    setSchemaData(prev => ({
+      ...prev,
+      [newTableId]: {
+        name: 'new_table',
+        category: 'Custom',
+        fields: [
+          { name: 'id', type: 'BIGINT', isPrimary: true, isForeign: false }
+        ]
+      }
+    }));
+    
+    // Add to table positions
+    setTablePositions(prev => ({
+      ...prev,
+      [newTableId]: { top: 100, left: 300 }
+    }));
+  };
+
+  const removeTable = (tableId: string) => {
+    setSchemaData(prev => {
+      const newData = { ...prev } as any;
+      delete newData[tableId];
+      return newData;
+    });
+    
+    setTablePositions(prev => {
+      const newPositions = { ...prev } as any;
+      delete newPositions[tableId];
+      return newPositions;
+    });
+  };
+
   const router = useRouter();
   const [analytics, setAnalytics] = useState<any>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
@@ -160,6 +335,92 @@ export default function AdminDashboard() {
   const [savingMetrics, setSavingMetrics] = useState(false);
   const [loadingMetrics, setLoadingMetrics] = useState(false);
 
+  // ERD dragging state
+  const [tablePositions, setTablePositions] = useState({
+    users: { top: 40, left: 50 },
+    profiles: { top: 40, left: 350 },
+    tables: { top: 60, left: 650 },
+    reservations: { top: 280, left: 400 },
+    daily_metrics: { top: 240, left: 40 }
+  });
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const erdContainerRef = useRef<HTMLDivElement>(null);
+  
+  // Schema editing state
+  const [editingTable, setEditingTable] = useState<string | null>(null);
+  const [schemaData, setSchemaData] = useState({
+    users: {
+      name: 'auth.users',
+      category: 'Auth',
+      fields: [
+        { name: 'id', type: 'UUID', isPrimary: true, isForeign: false },
+        { name: 'email', type: 'VARCHAR', isPrimary: false, isForeign: false },
+        { name: 'created_at', type: 'TIMESTAMP', isPrimary: false, isForeign: false },
+        { name: 'updated_at', type: 'TIMESTAMP', isPrimary: false, isForeign: false }
+      ]
+    },
+    profiles: {
+      name: 'profiles',
+      category: 'User',
+      fields: [
+        { name: 'id', type: 'UUID', isPrimary: true, isForeign: false },
+        { name: 'user_id', type: 'UUID', isPrimary: false, isForeign: true, references: 'auth.users.id' },
+        { name: 'email', type: 'VARCHAR', isPrimary: false, isForeign: false },
+        { name: 'name', type: 'VARCHAR', isPrimary: false, isForeign: false },
+        { name: 'phone', type: 'VARCHAR', isPrimary: false, isForeign: false },
+        { name: 'role', type: 'VARCHAR', isPrimary: false, isForeign: false },
+        { name: 'created_at', type: 'TIMESTAMP', isPrimary: false, isForeign: false }
+      ]
+    },
+    tables: {
+      name: 'tables',
+      category: 'Rest',
+      fields: [
+        { name: 'id', type: 'BIGINT', isPrimary: true, isForeign: false },
+        { name: 'table_number', type: 'INTEGER', isPrimary: false, isForeign: false },
+        { name: 'capacity', type: 'INTEGER', isPrimary: false, isForeign: false },
+        { name: 'location', type: 'VARCHAR', isPrimary: false, isForeign: false },
+        { name: 'created_at', type: 'TIMESTAMP', isPrimary: false, isForeign: false }
+      ]
+    },
+    reservations: {
+      name: 'reservations',
+      category: 'Book',
+      fields: [
+        { name: 'id', type: 'BIGINT', isPrimary: true, isForeign: false },
+        { name: 'user_id', type: 'UUID', isPrimary: false, isForeign: true, references: 'auth.users.id' },
+        { name: 'table_id', type: 'BIGINT', isPrimary: false, isForeign: true, references: 'tables.id' },
+        { name: 'name', type: 'VARCHAR', isPrimary: false, isForeign: false },
+        { name: 'email', type: 'VARCHAR', isPrimary: false, isForeign: false },
+        { name: 'phone', type: 'VARCHAR', isPrimary: false, isForeign: false },
+        { name: 'party_size', type: 'INTEGER', isPrimary: false, isForeign: false },
+        { name: 'datetime', type: 'TIMESTAMP', isPrimary: false, isForeign: false },
+        { name: 'status', type: 'VARCHAR', isPrimary: false, isForeign: false },
+        { name: 'created_at', type: 'TIMESTAMP', isPrimary: false, isForeign: false }
+      ]
+    },
+    daily_metrics: {
+      name: 'daily_metrics',
+      category: 'Data',
+      fields: [
+        { name: 'id', type: 'BIGSERIAL', isPrimary: true, isForeign: false },
+        { name: 'user_id', type: 'UUID', isPrimary: false, isForeign: true, references: 'auth.users.id' },
+        { name: 'date', type: 'DATE', isPrimary: false, isForeign: false },
+        { name: 'daily_revenue', type: 'DECIMAL', isPrimary: false, isForeign: false },
+        { name: 'avg_order_value', type: 'DECIMAL', isPrimary: false, isForeign: false },
+        { name: 'food_cost_percent', type: 'DECIMAL', isPrimary: false, isForeign: false },
+        { name: 'labor_cost_percent', type: 'DECIMAL', isPrimary: false, isForeign: false },
+        { name: 'daily_covers', type: 'INTEGER', isPrimary: false, isForeign: false },
+        { name: 'table_turnover', type: 'DECIMAL', isPrimary: false, isForeign: false },
+        { name: 'reservation_rate', type: 'DECIMAL', isPrimary: false, isForeign: false },
+        { name: 'waste_percent', type: 'DECIMAL', isPrimary: false, isForeign: false },
+        { name: 'created_at', type: 'TIMESTAMP', isPrimary: false, isForeign: false },
+        { name: 'updated_at', type: 'TIMESTAMP', isPrimary: false, isForeign: false }
+      ]
+    }
+  });
+
   // Dynamic chart data based on real reservations and metrics
   const [chartData, setChartData] = useState({
     dailyRevenue: {
@@ -206,32 +467,23 @@ export default function AdminDashboard() {
     const currentReservations = reservationData || reservations;
     if (currentReservations.length === 0) return;
 
-    // 1. Daily Revenue Trend (last 7 days based on metrics)
-    const today = new Date();
-    const dailyLabels = [];
-    const dailyRevenueData = [];
+    // 1. Party Size Distribution Bar Chart
+    const partySizeCount: { [key: number]: number } = {};
     
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date(today);
-      date.setDate(today.getDate() - i);
-      dailyLabels.push(date.toLocaleDateString('en-US', { weekday: 'short' }));
-      
-      // Calculate revenue based on reservations for that day and average order value
-      const dayReservations = currentReservations.filter(r => {
-        const resDate = new Date(r.datetime);
-        return resDate.toDateString() === date.toDateString();
-      });
-      
-      const dayRevenue = dayReservations.reduce((total, res) => {
-        return total + (res.party_size * getNumericValue(metrics.avgOrderValue));
-      }, 0);
-      
-      // Add some variation if no reservations for realistic demo
-      const finalRevenue = dayRevenue > 0 ? dayRevenue : 
-        getNumericValue(metrics.dailyRevenue) * (0.7 + Math.random() * 0.6);
-      
-      dailyRevenueData.push(Math.round(finalRevenue));
-    }
+    // Count reservations by party size
+    currentReservations.forEach(r => {
+      const size = r.party_size;
+      partySizeCount[size] = (partySizeCount[size] || 0) + 1;
+    });
+    
+    // Create arrays for chart
+    const partySizeChartLabels = Object.keys(partySizeCount)
+      .map(size => `${size} ${size === '1' ? 'person' : 'people'}`)
+      .sort((a, b) => parseInt(a) - parseInt(b));
+    
+    const partySizeChartData = Object.keys(partySizeCount)
+      .sort((a, b) => parseInt(a) - parseInt(b))
+      .map(size => partySizeCount[parseInt(size)]);
 
     // 2. Hourly Reservations Distribution (create a full day timeline)
     const hourlyDistribution: { [key: number]: number } = {};
@@ -287,10 +539,10 @@ export default function AdminDashboard() {
     // Update chart data
     setChartData({
       dailyRevenue: {
-        labels: dailyLabels,
+        labels: partySizeChartLabels,
         datasets: [{
-          label: 'Daily Revenue',
-          data: dailyRevenueData,
+          label: 'Number of Reservations',
+          data: partySizeChartData,
           backgroundColor: 'rgba(59, 130, 246, 0.6)',
           borderColor: 'rgba(59, 130, 246, 1)',
           borderWidth: 2
@@ -328,10 +580,22 @@ export default function AdminDashboard() {
   const fetchReservations = async () => {
     setReservationsLoading(true);
     try {
-      // Fetch all reservations except cancelled ones (in case we're using status updates instead of deletion)
+      // Fetch all reservations (both guest and authenticated user reservations)
       const { data, error } = await supabase
         .from("reservations")
-        .select("id, name, email, phone, party_size, datetime")
+        .select(`
+          id, 
+          name, 
+          email, 
+          phone, 
+          party_size, 
+          datetime,
+          user_id,
+          guest_name,
+          guest_email,
+          guest_phone,
+          status
+        `)
         .not('status', 'eq', 'cancelled') // Exclude cancelled reservations
         .order('datetime', { ascending: true });
       
@@ -342,13 +606,23 @@ export default function AdminDashboard() {
         return;
       }
       
-      setReservations(data || []);
-      console.log("Fetched reservations (excluding cancelled):", data); // Debug log
+      // Process reservations to normalize guest vs user data
+      const processedReservations = (data || []).map(reservation => ({
+        ...reservation,
+        // Use guest info if it's a guest reservation, otherwise use user info
+        displayName: reservation.user_id ? reservation.name : reservation.guest_name,
+        displayEmail: reservation.user_id ? reservation.email : reservation.guest_email,
+        displayPhone: reservation.user_id ? reservation.phone : reservation.guest_phone,
+        isGuest: !reservation.user_id
+      }));
+      
+      setReservations(processedReservations);
+      console.log("Fetched reservations (including guests):", processedReservations); // Debug log
       
       // Regenerate chart data with fresh data
-      if (data && data.length > 0 && getNumericValue(metrics.avgOrderValue) > 0) {
-        generateChartData(data);
-      } else if (data && data.length === 0) {
+      if (processedReservations && processedReservations.length > 0) {
+        generateChartData(processedReservations);
+      } else if (processedReservations && processedReservations.length === 0) {
         // Clear charts if no reservations
         setChartData({
           dailyRevenue: { labels: [], datasets: [{ label: 'Daily Revenue', data: [], backgroundColor: 'rgba(59, 130, 246, 0.6)', borderColor: 'rgba(59, 130, 246, 1)', borderWidth: 2 }] },
@@ -369,11 +643,12 @@ export default function AdminDashboard() {
     setEditingReservation(reservation.id);
     setEditedReservation({
       id: reservation.id,
-      name: reservation.name,
-      email: reservation.email,
-      phone: reservation.phone,
+      name: reservation.displayName,
+      email: reservation.displayEmail,
+      phone: reservation.displayPhone,
       party_size: reservation.party_size,
-      datetime: reservation.datetime ? new Date(reservation.datetime).toISOString().slice(0, 16) : ''
+      datetime: reservation.datetime ? new Date(reservation.datetime).toISOString().slice(0, 16) : '',
+      isGuest: reservation.isGuest
     });
   };
 
@@ -386,19 +661,41 @@ export default function AdminDashboard() {
     if (!editedReservation.id) return;
 
     try {
+      // Determine if this is a guest reservation and prepare update data accordingly
+      const isGuestReservation = editedReservation.isGuest;
+      
       const updateData = {
-        name: editedReservation.name,
-        email: editedReservation.email,
-        phone: editedReservation.phone,
         party_size: parseInt(editedReservation.party_size),
-        datetime: editedReservation.datetime ? new Date(editedReservation.datetime).toISOString() : null
+        datetime: editedReservation.datetime ? new Date(editedReservation.datetime).toISOString() : null,
+        // Update the appropriate fields based on guest vs user reservation
+        ...(isGuestReservation ? {
+          guest_name: editedReservation.name,
+          guest_email: editedReservation.email,
+          guest_phone: editedReservation.phone
+        } : {
+          name: editedReservation.name,
+          email: editedReservation.email,
+          phone: editedReservation.phone
+        })
       };
 
       const { data, error } = await supabase
         .from("reservations")
         .update(updateData)
         .eq('id', editedReservation.id)
-        .select();
+        .select(`
+          id, 
+          name, 
+          email, 
+          phone, 
+          party_size, 
+          datetime,
+          user_id,
+          guest_name,
+          guest_email,
+          guest_phone,
+          status
+        `);
 
       if (error) {
         console.error("Error updating reservation:", error);
@@ -406,9 +703,26 @@ export default function AdminDashboard() {
         return;
       }
 
-      // Update local state
-      const updatedReservations = reservations.map(r => r.id === editedReservation.id ? { ...r, ...updateData } : r);
-      setReservations(updatedReservations);
+      // Process the updated reservation and update local state
+      if (data && data[0]) {
+        const updatedReservation = {
+          ...data[0],
+          displayName: data[0].user_id ? data[0].name : data[0].guest_name,
+          displayEmail: data[0].user_id ? data[0].email : data[0].guest_email,
+          displayPhone: data[0].user_id ? data[0].phone : data[0].guest_phone,
+          isGuest: !data[0].user_id
+        };
+        
+        const updatedReservations = reservations.map(r => 
+          r.id === editedReservation.id ? updatedReservation : r
+        );
+        setReservations(updatedReservations);
+        
+        // Regenerate chart data since reservation data changed
+        if (getNumericValue(metrics.avgOrderValue) > 0) {
+          generateChartData(updatedReservations);
+        }
+      }
 
       // Clear editing state
       setEditingReservation(null);
@@ -416,14 +730,37 @@ export default function AdminDashboard() {
 
       alert("Reservation updated successfully!");
 
-      // Regenerate chart data since reservation data changed
-      if (getNumericValue(metrics.avgOrderValue) > 0) {
-        generateChartData(updatedReservations);
-      }
-
     } catch (error) {
       console.error("Error saving reservation:", error);
       alert(`Error saving reservation: ${error}`);
+    }
+  };
+
+  // Send cancellation email helper function
+  const sendCancellationEmail = async (reservation: any) => {
+    try {
+      // Process reservation for email
+      const emailReservation = {
+        ...reservation,
+        displayName: reservation.user_id ? reservation.name : reservation.guest_name,
+        displayEmail: reservation.user_id ? reservation.email : reservation.guest_email,
+        displayPhone: reservation.user_id ? reservation.phone : reservation.guest_phone,
+        isGuest: !reservation.user_id
+      };
+      
+      await fetch('/api/send-email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          reservation: emailReservation,
+          type: 'cancellation'
+        }),
+      });
+    } catch (error) {
+      console.error("Failed to send cancellation email:", error);
+      // Don't throw error - deletion should still proceed even if email fails
     }
   };
 
@@ -468,6 +805,9 @@ export default function AdminDashboard() {
 
       if (!rpcError && rpcResult) {
         console.log("Successfully deleted via RPC function"); // Debug log
+        
+        // Send cancellation email for the deleted reservation
+        await sendCancellationEmail(existingReservation);
         
         // Update local state immediately
         const updatedReservations = reservations.filter(r => r.id !== reservationId);
@@ -552,6 +892,9 @@ export default function AdminDashboard() {
 
       console.log("Successfully processed reservation deletion:", reservationId); // Debug log
 
+      // Send cancellation email for the deleted reservation
+      await sendCancellationEmail(existingReservation);
+
       // Update local state immediately (only if database operation succeeded)
       const updatedReservations = reservations.filter(r => r.id !== reservationId);
       setReservations(updatedReservations);
@@ -574,6 +917,70 @@ export default function AdminDashboard() {
       ...prev,
       [field]: value
     }));
+  };
+
+  // Handle approving pending reservations
+  const handleApproveReservation = async (reservationId: string) => {
+    try {
+      const { error } = await supabase
+        .from('reservations')
+        .update({ status: 'confirmed' })
+        .eq('id', reservationId);
+
+      if (error) {
+        console.error("Error approving reservation:", error);
+        alert(`Error approving reservation: ${error.message}`);
+        return;
+      }
+
+      // Update local state
+      setReservations(prev => 
+        prev.map(r => 
+          r.id === reservationId 
+            ? { ...r, status: 'confirmed' }
+            : r
+        )
+      );
+
+      alert("Reservation approved successfully!");
+    } catch (error) {
+      console.error("Error approving reservation:", error);
+      alert(`Error approving reservation: ${error}`);
+    }
+  };
+
+  // Handle rejecting pending reservations
+  const handleRejectReservation = async (reservationId: string) => {
+    if (!confirm("Are you sure you want to reject this reservation? This action cannot be undone.")) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('reservations')
+        .update({ status: 'cancelled' })
+        .eq('id', reservationId);
+
+      if (error) {
+        console.error("Error rejecting reservation:", error);
+        alert(`Error rejecting reservation: ${error.message}`);
+        return;
+      }
+
+      // Update local state
+      setReservations(prev => 
+        prev.map(r => 
+          r.id === reservationId 
+            ? { ...r, status: 'cancelled' }
+            : r
+        )
+      );
+
+      alert("Reservation rejected successfully!");
+    } catch (error) {
+      console.error("Error rejecting reservation:", error);
+      alert(`Error rejecting reservation: ${error}`);
+    }
   };
 
   // Handle adding new reservations
@@ -1045,10 +1452,10 @@ export default function AdminDashboard() {
   if (loading || analyticsLoading) return <div className="flex justify-center items-center h-screen">Loading dashboard...</div>;
 
   return (
-    <div className="min-h-screen bg-[#18181b] font-sans text-white">
-      <div className="flex h-full">
+    <div className="min-h-screen bg-[#18181b] font-sans text-white overflow-y-auto">
+      <div className="flex h-full min-h-screen">
         {/* Sidebar */}
-        <aside className="w-72 bg-[#111113] flex flex-col py-8 px-6 min-h-screen">
+        <aside className="w-72 bg-[#111113] flex flex-col py-8 px-6 min-h-screen fixed left-0 top-0 z-40">
           <div className="flex items-center mb-8">
             <div className="bg-[#23232a] rounded-full p-3">
               {/* Restaurant logo icon */}
@@ -1058,9 +1465,10 @@ export default function AdminDashboard() {
           <div className="uppercase text-xs text-gray-400 mb-4 tracking-widest">General</div>
           <nav className="flex flex-col gap-2">
             <button className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${activeSection === "dashboard" ? "bg-purple-900 text-purple-400" : "hover:bg-[#23232a] text-gray-200"}`} onClick={() => setActiveSection("dashboard")}> <HomeIcon className="h-5 w-5" /> Dashboard</button>
-            <button className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${activeSection === "reservations" ? "bg-[#23232a] text-white" : "hover:bg-[#23232a] text-gray-200"}`} onClick={() => setActiveSection("reservations")}> <UserGroupIcon className="h-5 w-5" /> Reservations</button>
-            <button className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${activeSection === "dataentry" ? "bg-[#23232a] text-white" : "hover:bg-[#23232a] text-gray-200"}`} onClick={() => setActiveSection("dataentry")}> <CircleStackIcon className="h-5 w-5" /> Data Entry</button>
-            <button className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${activeSection === "settings" ? "bg-[#23232a] text-white" : "hover:bg-[#23232a] text-gray-200"}`} onClick={() => setActiveSection("settings")}> <Cog6ToothIcon className="h-5 w-5" /> Settings</button>
+            <button className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${activeSection === "reservations" ? "bg-blue-900 text-blue-400" : "hover:bg-[#23232a] text-gray-200"}`} onClick={() => setActiveSection("reservations")}> <UserGroupIcon className="h-5 w-5" /> Reservations</button>
+            <button className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${activeSection === "dataentry" ? "bg-green-900 text-green-400" : "hover:bg-[#23232a] text-gray-200"}`} onClick={() => setActiveSection("dataentry")}> <CircleStackIcon className="h-5 w-5" /> Data Entry</button>
+            <button className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${activeSection === "database" ? "bg-orange-900 text-orange-400" : "hover:bg-[#23232a] text-gray-200"}`} onClick={() => setActiveSection("database")}> <ServerStackIcon className="h-5 w-5" /> Database</button>
+            <button className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${activeSection === "settings" ? "bg-gray-900 text-gray-400" : "hover:bg-[#23232a] text-gray-200"}`} onClick={() => setActiveSection("settings")}> <Cog6ToothIcon className="h-5 w-5" /> Settings</button>
           </nav>
           
           {/* Admin Profile at Bottom of Sidebar */}
@@ -1082,10 +1490,26 @@ export default function AdminDashboard() {
             </div>
           </div>
         </aside>
+        
+        {/* User Status Header - Customer Style */}
+        <header className="fixed top-0 right-0 p-4 flex justify-end items-center z-50">
+          <div className="bg-black/30 backdrop-blur-lg rounded-xl p-2 flex items-center gap-4">
+            <span className="text-sm text-gray-300 pl-2">
+              Welcome, {currentProfile?.name || currentProfile?.email || "Admin"}
+            </span>
+            <button
+              onClick={handleLogout}
+              className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm"
+            >
+              Sign Out
+            </button>
+          </div>
+        </header>
+
         {/* Main Content */}
-        <main className="flex-1 py-10 px-12">
-          {/* Top Bar: Breadcrumbs */}
-          <div className="flex items-center justify-between mb-8">
+        <main className="flex-1 py-10 px-12 pt-20 ml-72">
+          {/* Top Bar: Breadcrumbs - Simplified */}
+          <div className="flex items-center justify-start mb-8">
             <div className="flex items-center gap-2 text-gray-400">
               <span>Home</span>
               <span className="mx-1">&gt;</span>
@@ -1100,10 +1524,6 @@ export default function AdminDashboard() {
                   }
                 })()}
               </span>
-            </div>
-            <div className="flex items-center gap-4">
-              <span className="text-gray-400">{currentProfile?.email}</span>
-              <Button className="bg-white text-black border border-gray-700 hover:bg-gray-200" onClick={handleLogout}>Logout</Button>
             </div>
           </div>
           {/* Dashboard Section */}
@@ -1161,8 +1581,8 @@ export default function AdminDashboard() {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
                 {/* Daily Revenue Chart */}
                 <Card className="bg-[#23232a] rounded-xl p-6">
-                  <CardTitle className="font-bold text-lg text-white mb-4">Weekly Revenue Trend</CardTitle>
-                  <div className="text-sm text-gray-400 mb-2">Based on reservations × average order value</div>
+                  <CardTitle className="font-bold text-lg text-white mb-4">Party Size Distribution</CardTitle>
+                  <div className="text-sm text-gray-400 mb-2">Number of reservations by party size</div>
                   <div className="h-64">
                     <Bar 
                       data={chartData.dailyRevenue} 
@@ -1183,7 +1603,7 @@ export default function AdminDashboard() {
                             ticks: { 
                               color: '#9ca3af',
                               callback: function(value) {
-                                return '$' + value;
+                                return value;
                               }
                             },
                             grid: { color: 'rgba(156, 163, 175, 0.1)' }
@@ -1309,7 +1729,7 @@ export default function AdminDashboard() {
                         type="date"
                         value={selectedDate}
                         onChange={(e) => handleDateChange(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg bg-[#18181b] text-white border-2 border-gray-600 focus:border-blue-500 focus:outline-none transition-colors"
+                        className="w-full px-3 py-2 rounded-lg bg-[#18181b] text-white border-2 border-gray-600 font-sans focus:border-blue-500 focus:outline-none transition-colors"
                       />
                     </div>
                     <div className="text-sm text-gray-400">
@@ -1452,7 +1872,7 @@ export default function AdminDashboard() {
                       placeholder="0.00"
                       min="0"
                       step="0.01"
-                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 focus:border-blue-500 focus:outline-none transition-colors" 
+                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-blue-500 focus:outline-none transition-colors" 
                     />
                     <div className="text-xs text-gray-400 mt-1">Total sales for today</div>
                   </div>
@@ -1464,11 +1884,11 @@ export default function AdminDashboard() {
                       name="avgOrderValue" 
                       value={metrics.avgOrderValue} 
                       onChange={handleMetricChange} 
-                      placeholder="0.00"
+                      placeholder="25.00"
                       min="0"
-                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 focus:border-green-500 focus:outline-none transition-colors" 
+                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-green-500 focus:outline-none transition-colors" 
                     />
-                    <div className="text-xs text-gray-400 mt-1">Average spend per customer</div>
+                    <div className="text-xs text-gray-400 mt-1">Average spend per customer (defaults to $25 for charts)</div>
                   </div>
                   <div>
                     <label className="block text-base font-semibold mb-2 text-white">Food Cost Percentage (%)</label>
@@ -1481,7 +1901,7 @@ export default function AdminDashboard() {
                       placeholder="0.0"
                       min="0"
                       max="100"
-                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 focus:border-yellow-500 focus:outline-none transition-colors" 
+                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-yellow-500 focus:outline-none transition-colors" 
                     />
                     <div className="text-xs text-gray-400 mt-1">Target: 28-35%</div>
                   </div>
@@ -1496,7 +1916,7 @@ export default function AdminDashboard() {
                       placeholder="0.0"
                       min="0"
                       max="100"
-                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 focus:border-purple-500 focus:outline-none transition-colors" 
+                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-purple-500 focus:outline-none transition-colors" 
                     />
                     <div className="text-xs text-gray-400 mt-1">Target: 25-35%</div>
                   </div>
@@ -1509,7 +1929,7 @@ export default function AdminDashboard() {
                       onChange={handleMetricChange} 
                       placeholder="0"
                       min="0"
-                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 focus:border-cyan-500 focus:outline-none transition-colors" 
+                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-cyan-500 focus:outline-none transition-colors" 
                     />
                     <div className="text-xs text-gray-400 mt-1">Number of customers served today</div>
                   </div>
@@ -1523,7 +1943,7 @@ export default function AdminDashboard() {
                       onChange={handleMetricChange} 
                       placeholder="0.0"
                       min="0"
-                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 focus:border-orange-500 focus:outline-none transition-colors" 
+                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-orange-500 focus:outline-none transition-colors" 
                     />
                     <div className="text-xs text-gray-400 mt-1">Average times tables are used per day</div>
                   </div>
@@ -1538,7 +1958,7 @@ export default function AdminDashboard() {
                       placeholder="0.0"
                       min="0"
                       max="100"
-                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 focus:border-pink-500 focus:outline-none transition-colors" 
+                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-pink-500 focus:outline-none transition-colors" 
                     />
                     <div className="text-xs text-gray-400 mt-1">Percentage of tables with reservations</div>
                   </div>
@@ -1553,7 +1973,7 @@ export default function AdminDashboard() {
                       placeholder="0.0"
                       min="0"
                       max="100"
-                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 focus:border-red-500 focus:outline-none transition-colors" 
+                      className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-red-500 focus:outline-none transition-colors" 
                     />
                     <div className="text-xs text-gray-400 mt-1">Food waste as percentage of total food cost</div>
                   </div>
@@ -1589,7 +2009,14 @@ export default function AdminDashboard() {
               {/* Header with Add Reservation Button */}
               <Card className="bg-[#23232a] rounded-xl p-6">
                 <div className="flex flex-row justify-between items-center">
-                  <CardTitle className="text-white">Customer Reservations</CardTitle>
+                  <div className="flex items-center gap-3">
+                    <CardTitle className="text-white">Customer Reservations</CardTitle>
+                    {reservations.filter(r => r.status === 'pending').length > 0 && (
+                      <span className="bg-yellow-600 text-yellow-100 px-3 py-1 rounded-full text-sm font-medium">
+                        {reservations.filter(r => r.status === 'pending').length} Pending Approval
+                      </span>
+                    )}
+                  </div>
                   <div className="flex gap-3">
                     <Button 
                       onClick={() => setShowAddForm(!showAddForm)}
@@ -1623,7 +2050,7 @@ export default function AdminDashboard() {
                         value={newReservation.name}
                         onChange={(e) => handleNewReservationChange('name', e.target.value)}
                         placeholder="Enter customer name"
-                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 focus:border-green-500 focus:outline-none"
+                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans focus:border-green-500 focus:outline-none"
                       />
                     </div>
                     <div>
@@ -1633,7 +2060,7 @@ export default function AdminDashboard() {
                         value={newReservation.email}
                         onChange={(e) => handleNewReservationChange('email', e.target.value)}
                         placeholder="customer@email.com"
-                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 focus:border-green-500 focus:outline-none"
+                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans focus:border-green-500 focus:outline-none"
                       />
                     </div>
                     <div>
@@ -1643,7 +2070,7 @@ export default function AdminDashboard() {
                         value={newReservation.phone}
                         onChange={(e) => handleNewReservationChange('phone', e.target.value)}
                         placeholder="(555) 123-4567"
-                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 focus:border-green-500 focus:outline-none"
+                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans focus:border-green-500 focus:outline-none"
                       />
                     </div>
                     <div>
@@ -1654,7 +2081,7 @@ export default function AdminDashboard() {
                         max="20"
                         value={newReservation.party_size}
                         onChange={(e) => handleNewReservationChange('party_size', parseInt(e.target.value))}
-                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 focus:border-green-500 focus:outline-none"
+                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans focus:border-green-500 focus:outline-none"
                       />
                     </div>
                     <div className="md:col-span-2">
@@ -1664,7 +2091,7 @@ export default function AdminDashboard() {
                         value={newReservation.datetime}
                         onChange={(e) => handleNewReservationChange('datetime', e.target.value)}
                         min={new Date().toISOString().slice(0, 16)}
-                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 focus:border-green-500 focus:outline-none"
+                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans focus:border-green-500 focus:outline-none"
                       />
                     </div>
                   </div>
@@ -1699,6 +2126,8 @@ export default function AdminDashboard() {
                           <th className="p-4 text-left font-semibold text-white">Phone</th>
                           <th className="p-4 text-left font-semibold text-white">Party Size</th>
                           <th className="p-4 text-left font-semibold text-white">Date/Time</th>
+                          <th className="p-4 text-left font-semibold text-white">Status</th>
+                          <th className="p-4 text-left font-semibold text-white">Type</th>
                           <th className="p-4 text-left font-semibold text-white">Actions</th>
                         </tr>
                       </thead>
@@ -1716,7 +2145,7 @@ export default function AdminDashboard() {
                                     className="w-full px-2 py-1 bg-[#111113] text-white border border-gray-600 rounded text-sm"
                                   />
                                 ) : (
-                                  <span className="text-white font-medium">{r.name}</span>
+                                  <span className="text-white font-medium">{r.displayName}</span>
                                 )}
                               </td>
                               
@@ -1730,7 +2159,7 @@ export default function AdminDashboard() {
                                     className="w-full px-2 py-1 bg-[#111113] text-white border border-gray-600 rounded text-sm"
                                   />
                                 ) : (
-                                  <span className="text-gray-300">{r.email}</span>
+                                  <span className="text-gray-300">{r.displayEmail}</span>
                                 )}
                               </td>
                               
@@ -1744,7 +2173,7 @@ export default function AdminDashboard() {
                                     className="w-full px-2 py-1 bg-[#111113] text-white border border-gray-600 rounded text-sm"
                                   />
                                 ) : (
-                                  <span className="text-gray-300">{r.phone}</span>
+                                  <span className="text-gray-300">{r.displayPhone}</span>
                                 )}
                               </td>
                               
@@ -1780,9 +2209,38 @@ export default function AdminDashboard() {
                                 )}
                               </td>
                               
+                              {/* Status Cell */}
+                              <td className="p-4">
+                                <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${
+                                  r.status === 'pending' 
+                                    ? 'bg-yellow-900/30 text-yellow-300 border border-yellow-500/30' 
+                                    : r.status === 'confirmed'
+                                    ? 'bg-green-900/30 text-green-300 border border-green-500/30'
+                                    : r.status === 'cancelled'
+                                    ? 'bg-red-900/30 text-red-300 border border-red-500/30'
+                                    : 'bg-gray-900/30 text-gray-300 border border-gray-500/30'
+                                }`}>
+                                  {r.status === 'pending' && <><ClockIcon className="w-3 h-3" /> Pending</>}
+                                  {r.status === 'confirmed' && <><CheckCircleIcon className="w-3 h-3" /> Confirmed</>}
+                                  {r.status === 'cancelled' && <><XCircleIcon className="w-3 h-3" /> Cancelled</>}
+                                  {!r.status && <><QuestionMarkCircleIcon className="w-3 h-3" /> Unknown</>}
+                                </span>
+                              </td>
+                              
+                              {/* Type Cell */}
+                              <td className="p-4">
+                                <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${
+                                  r.isGuest 
+                                    ? 'bg-blue-900/30 text-blue-300 border border-blue-500/30' 
+                                    : 'bg-green-900/30 text-green-300 border border-green-500/30'
+                                }`}>
+                                  {r.isGuest ? <><UserIcon className="w-3 h-3" /> Guest</> : <><LockClosedIcon className="w-3 h-3" /> Account</>}
+                                </span>
+                              </td>
+                              
                               {/* Actions Cell */}
                               <td className="p-4">
-                                <div className="flex gap-2">
+                                <div className="flex gap-2 flex-wrap">
                                   {editingReservation === r.id ? (
                                     <>
                                       <Button
@@ -1803,6 +2261,30 @@ export default function AdminDashboard() {
                                     </>
                                   ) : (
                                     <>
+                                      {/* Show Approve/Reject buttons for pending reservations */}
+                                      {r.status === 'pending' && (
+                                        <>
+                                          <Button
+                                            size="sm"
+                                            onClick={() => handleApproveReservation(r.id)}
+                                            className="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 inline-flex items-center gap-1"
+                                          >
+                                            <CheckCircleIcon className="w-3 h-3" />
+                                            Approve
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => handleRejectReservation(r.id)}
+                                            className="text-red-400 border-red-600 hover:bg-red-700 text-xs px-3 py-1 inline-flex items-center gap-1"
+                                          >
+                                            <XCircleIcon className="w-3 h-3" />
+                                            Reject
+                                          </Button>
+                                        </>
+                                      )}
+                                      
+                                      {/* Standard Edit/Delete buttons */}
                                       <Button
                                         size="sm"
                                         variant="outline"
@@ -1827,7 +2309,7 @@ export default function AdminDashboard() {
                           ))
                         ) : (
                           <tr>
-                            <td colSpan={6} className="text-gray-400 text-center py-8 bg-[#18181b]">
+                            <td colSpan={8} className="text-gray-400 text-center py-8 bg-[#18181b]">
                               {reservationsLoading ? "Loading reservations..." : "No reservations found. Click 'Add Reservation' to create your first booking."}
                             </td>
                           </tr>
@@ -1840,6 +2322,302 @@ export default function AdminDashboard() {
             </div>
           )}
 
+          {/* Database Section */}
+          {activeSection === "database" && (
+            <div className="space-y-6">
+              <Card className="bg-[#23232a] rounded-xl p-6">
+                <CardTitle className="font-bold text-lg mb-4 text-white">Database Schema</CardTitle>
+                <p className="text-gray-400 mb-6">Interactive Entity Relationship Diagram</p>
+                
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-bold text-white">Database Schema (ERD)</h2>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={addTable}
+                      className="px-3 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-sm transition-colors"
+                    >
+                      + Add Table
+                    </button>
+                    <button
+                      onClick={() => {
+                        const resetPositions = {
+                          users: { top: 40, left: 50 },
+                          profiles: { top: 40, left: 350 },
+                          tables: { top: 60, left: 650 },
+                          reservations: { top: 280, left: 400 },
+                          daily_metrics: { top: 240, left: 40 }
+                        };
+                        setTablePositions(resetPositions);
+                      }}
+                      className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm transition-colors"
+                    >
+                      Reset Layout
+                    </button>
+                  </div>
+                </div>
+
+                {/* Instructions */}
+                <div className="mb-4 p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+                  <div className="text-sm text-blue-300 flex items-center gap-2">
+                    <span className="text-blue-400">💡</span>
+                    <span><strong>Double-click</strong> any table to edit schema • <strong>Drag</strong> to reposition • <strong>Red X</strong> to delete</span>
+                  </div>
+                </div>
+
+                {/* ERD Container */}
+                <div 
+                  ref={erdContainerRef}
+                  className="bg-[#0f1419] rounded-lg border border-gray-600 relative overflow-hidden select-none" 
+                  style={{ height: '600px' }}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
+                  onMouseLeave={handleMouseUp}
+                >
+                  {/* SVG Container for arrows */}
+                  <svg 
+                    className="absolute inset-0 w-full h-full pointer-events-none z-10"
+                    style={{ position: 'absolute', top: 0, left: 0 }}
+                  >
+                    {/* Arrow definitions with different colors for relationship types */}
+                    <defs>
+                      {/* One-to-One relationship (Blue) */}
+                      <marker id="oneToOne" markerWidth="10" markerHeight="7" 
+                       refX="10" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6" />
+                      </marker>
+                      {/* One-to-Many relationship (Green) */}
+                      <marker id="oneToMany" markerWidth="10" markerHeight="7" 
+                       refX="10" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="#10b981" />
+                      </marker>
+                      {/* Many-to-One relationship (Orange) */}
+                      <marker id="manyToOne" markerWidth="10" markerHeight="7" 
+                       refX="10" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="#f59e0b" />
+                      </marker>
+                    </defs>
+                    
+                    {/* Dynamic arrows based on table positions */}
+                    {(() => {
+                      const arrows = getArrowCoordinates();
+                      return (
+                        <>
+                          {/* Users -> Profiles (One-to-One) */}
+                          <line 
+                            x1={arrows.usersToProfiles.x1} 
+                            y1={arrows.usersToProfiles.y1} 
+                            x2={arrows.usersToProfiles.x2} 
+                            y2={arrows.usersToProfiles.y2} 
+                            stroke="#3b82f6" 
+                            strokeWidth="2" 
+                            markerEnd="url(#oneToOne)" 
+                          />
+                          <text 
+                            x={(arrows.usersToProfiles.x1 + arrows.usersToProfiles.x2) / 2} 
+                            y={(arrows.usersToProfiles.y1 + arrows.usersToProfiles.y2) / 2 - 5} 
+                            fill="#3b82f6" 
+                            fontSize="10" 
+                            textAnchor="middle"
+                          >
+                            1:1
+                          </text>
+                          
+                          {/* Users -> Reservations (One-to-Many) */}
+                          <line 
+                            x1={arrows.usersToReservations.x1} 
+                            y1={arrows.usersToReservations.y1} 
+                            x2={arrows.usersToReservations.x2} 
+                            y2={arrows.usersToReservations.y2} 
+                            stroke="#10b981" 
+                            strokeWidth="2" 
+                            markerEnd="url(#oneToMany)" 
+                          />
+                          <text 
+                            x={(arrows.usersToReservations.x1 + arrows.usersToReservations.x2) / 2} 
+                            y={(arrows.usersToReservations.y1 + arrows.usersToReservations.y2) / 2 - 5} 
+                            fill="#10b981" 
+                            fontSize="10" 
+                            textAnchor="middle"
+                          >
+                            1:N
+                          </text>
+                          
+                          {/* Users -> Daily Metrics (One-to-Many) */}
+                          <line 
+                            x1={arrows.usersToMetrics.x1} 
+                            y1={arrows.usersToMetrics.y1} 
+                            x2={arrows.usersToMetrics.x2} 
+                            y2={arrows.usersToMetrics.y2} 
+                            stroke="#10b981" 
+                            strokeWidth="2" 
+                            markerEnd="url(#oneToMany)" 
+                          />
+                          <text 
+                            x={(arrows.usersToMetrics.x1 + arrows.usersToMetrics.x2) / 2 - 15} 
+                            y={(arrows.usersToMetrics.y1 + arrows.usersToMetrics.y2) / 2} 
+                            fill="#10b981" 
+                            fontSize="10" 
+                            textAnchor="middle"
+                          >
+                            1:N
+                          </text>
+                          
+                          {/* Tables -> Reservations (One-to-Many) */}
+                          <line 
+                            x1={arrows.tablesToReservations.x1} 
+                            y1={arrows.tablesToReservations.y1} 
+                            x2={arrows.tablesToReservations.x2} 
+                            y2={arrows.tablesToReservations.y2} 
+                            stroke="#10b981" 
+                            strokeWidth="2" 
+                            markerEnd="url(#oneToMany)" 
+                          />
+                          <text 
+                            x={(arrows.tablesToReservations.x1 + arrows.tablesToReservations.x2) / 2} 
+                            y={(arrows.tablesToReservations.y1 + arrows.tablesToReservations.y2) / 2 - 5} 
+                            fill="#10b981" 
+                            fontSize="10" 
+                            textAnchor="middle"
+                          >
+                            1:N
+                          </text>
+                        </>
+                      );
+                    })()}
+                  </svg>
+
+                  {/* Dynamic Tables */}
+                  {Object.entries(schemaData).map(([tableId, tableData]) => {
+                    const position = tablePositions[tableId as keyof typeof tablePositions] || { top: 100, left: 100 };
+                    const colorClasses = {
+                      users: 'from-blue-900 to-blue-800 border-blue-400',
+                      profiles: 'from-purple-900 to-purple-800 border-purple-400',
+                      tables: 'from-teal-900 to-teal-800 border-teal-400',
+                      reservations: 'from-orange-900 to-orange-800 border-orange-400',
+                      daily_metrics: 'from-indigo-900 to-indigo-800 border-indigo-400'
+                    };
+                    const tableColor = colorClasses[tableId as keyof typeof colorClasses] || 'from-gray-900 to-gray-800 border-gray-400';
+                    
+                    return (
+                      <div 
+                        key={tableId}
+                        className={`absolute bg-gradient-to-br ${tableColor} border-2 rounded-lg p-4 shadow-xl cursor-move hover:shadow-2xl group ${dragging === tableId ? 'z-50 scale-105' : 'z-20 transition-all duration-200'} hover:border-opacity-80 hover:scale-[1.02]`}
+                        style={{ 
+                          top: `${position.top}px`, 
+                          left: `${position.left}px`, 
+                          width: tableId === 'reservations' ? '240px' : tableId === 'daily_metrics' ? '260px' : tableId === 'profiles' ? '220px' : '200px'
+                        }}
+                        onMouseDown={(e) => handleMouseDown(tableId, e)}
+                        onDoubleClick={() => handleTableDoubleClick(tableId)}
+                        title="Double-click to edit schema"
+                      >
+                        <div className="flex items-center gap-2 mb-3">
+                          <div className="w-3 h-3 bg-current rounded-full shadow-sm opacity-60"></div>
+                          <h3 className="text-white font-bold text-sm flex-1">{(tableData as any).name}</h3>
+                          <div className="text-xs opacity-60">{(tableData as any).category}</div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm(`Delete table "${(tableData as any).name}"?`)) {
+                                removeTable(tableId);
+                              }
+                            }}
+                            className="w-5 h-5 bg-red-600/80 hover:bg-red-500 text-white rounded-full flex items-center justify-center text-xs font-bold opacity-0 group-hover:opacity-100 transition-all duration-200 hover:scale-110"
+                            title="Delete table"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        
+                        <div className="space-y-1 text-xs relative z-10">
+                          {(tableData as any).fields.map((field: any, index: number) => (
+                            <div key={index} className="flex justify-between">
+                              <span className={`${field.isPrimary ? 'text-amber-300 font-medium' : field.isForeign ? 'text-emerald-300 font-medium' : 'text-gray-200'}`}>
+                                {field.isPrimary ? '🔑 ' : field.isForeign ? '🔗 ' : ''}{field.name}
+                              </span>
+                              <span className={`font-mono ${
+                                field.type === 'UUID' ? 'text-cyan-300' :
+                                field.type === 'VARCHAR' ? 'text-green-300' :
+                                field.type.includes('INT') ? 'text-orange-300' :
+                                field.type === 'DECIMAL' ? 'text-yellow-300' :
+                                field.type.includes('TIME') ? 'text-purple-300' :
+                                field.type === 'DATE' ? 'text-pink-300' :
+                                'text-gray-300'
+                              }`}>
+                                {field.type}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Legend */}
+                <div className="mt-4 grid grid-cols-2 gap-6 text-xs bg-[#1a1a1a] p-4 rounded-lg border border-gray-700">
+                  <div>
+                    <h4 className="text-white font-semibold mb-2">Field Types</h4>
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <div className="text-amber-300 font-medium">🔑</div>
+                        <span className="text-gray-300">Primary Key</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-emerald-300 font-medium">🔗</div>
+                        <span className="text-gray-300">Foreign Key</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <h4 className="text-white font-semibold mb-2">Data Types</h4>
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-cyan-300 font-mono text-xs">UUID</span>
+                        <span className="text-gray-400">Unique Identifier</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-green-300 font-mono text-xs">VARCHAR</span>
+                        <span className="text-gray-400">Variable Text</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-orange-300 font-mono text-xs">INTEGER</span>
+                        <span className="text-gray-400">Whole Number</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-yellow-300 font-mono text-xs">DECIMAL</span>
+                        <span className="text-gray-400">Decimal Number</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-purple-300 font-mono text-xs">TIMESTAMP</span>
+                        <span className="text-gray-400">Date & Time</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-pink-300 font-mono text-xs">DATE</span>
+                        <span className="text-gray-400">Date Only</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="col-span-2">
+                    <h4 className="text-white font-semibold mb-2">Relationships</h4>
+                    <div className="flex gap-6">
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-0.5 bg-blue-500"></div>
+                        <span className="text-blue-400 text-xs">1:1</span>
+                        <span className="text-gray-400">One-to-One</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-0.5 bg-emerald-500"></div>
+                        <span className="text-emerald-400 text-xs">1:N</span>
+                        <span className="text-gray-400">One-to-Many</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
+
           {/* Settings Section */}
           {activeSection === "settings" && (
             <Card className="bg-[#23232a] rounded-xl p-8 max-w-xl mx-auto">
@@ -1847,15 +2625,15 @@ export default function AdminDashboard() {
               <form className="grid grid-cols-1 gap-6 mb-6">
                 <div>
                   <label className="block text-sm font-semibold mb-1 text-white">Name</label>
-                  <input type="text" name="name" value={profileSettings.name} onChange={handleSettingsChange} className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700" />
+                  <input type="text" name="name" value={profileSettings.name} onChange={handleSettingsChange} className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans" />
                 </div>
                 <div>
                   <label className="block text-sm font-semibold mb-1 text-white">Email</label>
-                  <input type="email" name="email" value={profileSettings.email} onChange={handleSettingsChange} className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700" />
+                  <input type="email" name="email" value={profileSettings.email} onChange={handleSettingsChange} className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans" />
                 </div>
                 <div>
                   <label className="block text-sm font-semibold mb-1 text-white">Phone</label>
-                  <input type="text" name="phone" value={profileSettings.phone} onChange={handleSettingsChange} className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700" />
+                  <input type="text" name="phone" value={profileSettings.phone} onChange={handleSettingsChange} className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans" />
                 </div>
               </form>
               <Button className="bg-white text-black border border-gray-700 hover:bg-gray-200" onClick={handleSettingsSave} disabled={settingsSaving}>
@@ -1865,6 +2643,178 @@ export default function AdminDashboard() {
           )}
         </main>
       </div>
+
+      {/* Schema Editor Modal */}
+      {editingTable && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-[#1a1a1a] border border-gray-600 rounded-lg p-6 max-w-4xl w-full max-h-[80vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-bold text-white">
+                Edit Table: {(schemaData as any)[editingTable]?.name}
+              </h3>
+              <button
+                onClick={() => setEditingTable(null)}
+                className="text-gray-400 hover:text-white text-xl"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              {/* Table Name */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Table Name
+                </label>
+                <input
+                  type="text"
+                  value={(schemaData as any)[editingTable]?.name || ''}
+                  onChange={(e) => updateTableName(editingTable, e.target.value)}
+                  className="w-full px-3 py-2 bg-[#0f1419] border border-gray-600 rounded text-white focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Category */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Category
+                </label>
+                <select
+                  value={(schemaData as any)[editingTable]?.category || ''}
+                  onChange={(e) => setSchemaData(prev => ({
+                    ...prev,
+                    [editingTable]: {
+                      ...(prev as any)[editingTable],
+                      category: e.target.value
+                    }
+                  }))}
+                  className="w-full px-3 py-2 bg-[#0f1419] border border-gray-600 rounded text-white focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="Auth">Auth</option>
+                  <option value="User">User</option>
+                  <option value="Rest">Rest</option>
+                  <option value="Book">Book</option>
+                  <option value="Data">Data</option>
+                  <option value="Custom">Custom</option>
+                </select>
+              </div>
+
+              {/* Fields */}
+              <div>
+                <div className="flex justify-between items-center mb-4">
+                  <label className="block text-sm font-medium text-gray-300">
+                    Fields
+                  </label>
+                  <button
+                    onClick={() => addField(editingTable)}
+                    className="px-3 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-sm"
+                  >
+                    + Add Field
+                  </button>
+                </div>
+                
+                <div className="space-y-3">
+                  {(schemaData as any)[editingTable]?.fields.map((field: any, index: number) => (
+                    <div key={index} className="flex gap-3 items-center p-3 bg-[#0f1419] border border-gray-600 rounded">
+                      {/* Field Name */}
+                      <input
+                        type="text"
+                        value={field.name}
+                        onChange={(e) => updateField(editingTable, index, { name: e.target.value })}
+                        className="flex-1 px-3 py-2 bg-[#1a1a1a] border border-gray-700 rounded text-white font-sans focus:border-blue-500 focus:outline-none"
+                        placeholder="Field name"
+                      />
+                      
+                      {/* Data Type */}
+                      <select
+                        value={field.type}
+                        onChange={(e) => updateField(editingTable, index, { type: e.target.value })}
+                        className="px-3 py-2 bg-[#1a1a1a] border border-gray-700 rounded text-white focus:border-blue-500 focus:outline-none"
+                        style={{ fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif' }}
+                      >
+                        <option value="VARCHAR" style={{ fontFamily: 'inherit' }}>VARCHAR</option>
+                        <option value="TEXT" style={{ fontFamily: 'inherit' }}>TEXT</option>
+                        <option value="UUID" style={{ fontFamily: 'inherit' }}>UUID</option>
+                        <option value="INTEGER" style={{ fontFamily: 'inherit' }}>INTEGER</option>
+                        <option value="BIGINT" style={{ fontFamily: 'inherit' }}>BIGINT</option>
+                        <option value="BIGSERIAL" style={{ fontFamily: 'inherit' }}>BIGSERIAL</option>
+                        <option value="DECIMAL" style={{ fontFamily: 'inherit' }}>DECIMAL</option>
+                        <option value="FLOAT" style={{ fontFamily: 'inherit' }}>FLOAT</option>
+                        <option value="BOOLEAN" style={{ fontFamily: 'inherit' }}>BOOLEAN</option>
+                        <option value="DATE" style={{ fontFamily: 'inherit' }}>DATE</option>
+                        <option value="TIME" style={{ fontFamily: 'inherit' }}>TIME</option>
+                        <option value="TIMESTAMP" style={{ fontFamily: 'inherit' }}>TIMESTAMP</option>
+                        <option value="JSON" style={{ fontFamily: 'inherit' }}>JSON</option>
+                        <option value="JSONB" style={{ fontFamily: 'inherit' }}>JSONB</option>
+                      </select>
+                      
+                      {/* Primary Key */}
+                      <label className="flex items-center gap-2 text-amber-300">
+                        <input
+                          type="checkbox"
+                          checked={field.isPrimary}
+                          onChange={(e) => updateField(editingTable, index, { isPrimary: e.target.checked })}
+                          className="rounded"
+                        />
+                        🔑 PK
+                      </label>
+                      
+                      {/* Foreign Key */}
+                      <label className="flex items-center gap-2 text-emerald-300">
+                        <input
+                          type="checkbox"
+                          checked={field.isForeign}
+                          onChange={(e) => updateField(editingTable, index, { isForeign: e.target.checked })}
+                          className="rounded"
+                        />
+                        🔗 FK
+                      </label>
+                      
+                      {/* References (if FK) */}
+                      {field.isForeign && (
+                        <input
+                          type="text"
+                          value={field.references || ''}
+                          onChange={(e) => updateField(editingTable, index, { references: e.target.value })}
+                          className="px-3 py-2 bg-[#1a1a1a] border border-gray-700 rounded text-white font-sans focus:border-blue-500 focus:outline-none"
+                          placeholder="table.column"
+                        />
+                      )}
+                      
+                      {/* Remove Field */}
+                      <button
+                        onClick={() => removeField(editingTable, index)}
+                        className="text-red-400 hover:text-red-300 px-2"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => setEditingTable(null)}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+              >
+                Close
+              </button>
+              <button
+                onClick={() => {
+                  // TODO: Generate and execute SQL
+                  alert('Schema changes saved! (SQL execution not implemented yet)');
+                  setEditingTable(null);
+                }}
+                className="px-4 py-2 bg-blue-700 hover:bg-blue-600 text-white rounded transition-colors"
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

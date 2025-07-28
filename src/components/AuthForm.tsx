@@ -18,7 +18,7 @@ export default function AuthForm() {
     if (isSignUp) {
       const { error } = await supabase.auth.signUp({ email, password });
       if (error) setError(error.message);
-      else setMessage("Check your email for a confirmation link.");
+      else setMessage("Check your email for a confirmation link. If you've made reservations before with this email, they'll be automatically linked to your new account!");
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) setError(error.message);
@@ -31,8 +31,8 @@ export default function AuthForm() {
 
   if (loading) return <div className="flex justify-center items-center text-gray-400">Loading...</div>;
   if (user) return (
-    <div className="bg-[#23232a]/90 backdrop-blur-sm rounded-xl p-6 text-center max-w-sm mx-auto shadow-2xl border border-gray-700/50">
-      <p className="text-white mb-4 drop-shadow-md">Signed in as <span className="font-semibold">{user.email}</span></p>
+    <div className="bg-[#23232a]/90 backdrop-blur-sm rounded-xl p-8 pt-10 text-center max-w-sm mx-auto shadow-2xl border border-gray-700/50 mt-12">
+      <p className="text-white text-lg mb-8 drop-shadow-md break-words">Signed in as <br/><span className="font-semibold text-xl">{user.email}</span></p>
       <button onClick={handleSignOut} className="px-6 py-2 bg-white text-black rounded-lg hover:bg-gray-200 transition-colors font-semibold shadow-lg">
         Sign out
       </button>
