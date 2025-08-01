@@ -7,7 +7,7 @@ const systemPrompt = `You are an intelligent reservation agent for HostMate, a f
 RESTAURANT INFO:
 - Name: HostMate
 - Location: 123 Culinary Lane, Foodie City
-- Hours: Monday-Saturday 5 PM - 11 PM, Closed Sundays
+- Hours: Monday-Sunday 9:00 AM - 10:30 PM
 - Phone: (123) 456-7890
 - Cuisine: Fine dining with modern American cuisine
 - Average dining time: 1.5-2 hours
@@ -17,162 +17,39 @@ RESERVATION REQUIREMENTS:
 You must collect these details to complete a reservation:
 1. Party size (number of people)
 2. Date (validate it's available and in the future)
-3. Time (between 5 PM - 9 PM, suggest times based on availability)
+3. Time (between 9:00 AM - 10:30 PM, suggest times based on availability)
 4. Customer name (full name)
 5. Contact method (email OR phone number)
 
 GUIDELINES:
 - Be conversational, friendly, and professional
-- Ask for ONE piece of information at a time
+- Never reference or mention pre-filled, previous, or prior information. Always use the latest user input as the source of truth for all reservation details, even if the user's name or email is pre-filled.
+- Never ask for clarification about pre-filled or previous values. If the user provides a new value, use it and move forward.
+- Never mention or reference the user's account, login status, or profile information in the conversation.
+- Only ask for each required detail once. Do not ask for repeated confirmations or for the same information again if it has already been provided.
+- As soon as you have all required details, immediately confirm the reservation in a single, clear message. Do not ask for additional confirmations or repeat the details multiple times.
+- If the user provides all details at once, confirm the reservation right away.
 - Validate each input (e.g., realistic party sizes, future dates, proper times)
 - Suggest alternatives if requested time isn't available
 - If user provides multiple details at once, acknowledge all and ask for missing ones
 - Use the customer's name once you have it
-- For logged-in users, pre-fill their name and email if available
-
-RESPONSE FORMAT:
-Respond with natural language. When you have all required information (party size, date, time, customer name, and email/phone), immediately proceed to book the reservation. End your response with "READY_TO_BOOK" to indicate the booking should be processed. Do not ask for additional confirmation once you have all required details.
-
-AVAILABILITY RULES:
-- Suggest time slots: 5:00 PM, 5:30 PM, 6:00 PM, 6:30 PM, 7:00 PM, 7:30 PM, 8:00 PM, 8:30 PM, 9:00 PM
-- Larger parties (8+) should be suggested earlier times (5:00-7:00 PM)
-- Weekend nights are busier - suggest reserving early
-
-Current date: ${new Date().toLocaleDateString()}
-Current time: ${new Date().toLocaleTimeString()}`;
+- For logged-in users, pre-fill their name and email if available, but never mention this in the conversation
+`;
 
 export async function POST(req: NextRequest) {
   console.log("=== RESERVATION AGENT API CALLED (v2) ===");
-  
+
   const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey || apiKey === "your_google_gemini_api_key_here") {
-    console.log("Google API key not configured - using fallback responses");
-    
-    try {
-      const body = await req.json();
-      const { message, conversationHistory, reservationData, userProfile } = body;
-
-      console.log("Request body:", { message, reservationData, userProfile });
-
-      // Simple fallback logic for testing
-      const lowerMessage = message.toLowerCase();
-      let reply = "";
-      let updatedReservationData = { ...reservationData };
-
-      // Auto-fill user data if available
-      if (userProfile && !updatedReservationData.customerName && userProfile.name) {
-        updatedReservationData.customerName = userProfile.name;
-      }
-      if (userProfile && !updatedReservationData.email && userProfile.email) {
-        updatedReservationData.email = userProfile.email;
-      }
-
-      // Extract basic data
-      const partyMatch = message.match(/(\d+)\s*(?:people|person|ppl|party|of|for)/i);
-      if (partyMatch) {
-        updatedReservationData.partySize = parseInt(partyMatch[1]);
-      }
-
-      if (lowerMessage.includes("hi") || lowerMessage.includes("hello")) {
-        reply = "Hello! I'm your reservation assistant. I'll help you book the perfect table. What size party are you planning for?";
-      } else if (!updatedReservationData.partySize) {
-        reply = "I'd be happy to help you make a reservation! How many people will be dining with us?";
-      } else if (!updatedReservationData.date) {
-        reply = `Great! A party of ${updatedReservationData.partySize}. What date would you like to dine with us?`;
-      } else if (!updatedReservationData.time) {
-        reply = `Perfect! For ${updatedReservationData.date}. What time would you prefer? We have availability from 5:00 PM to 9:00 PM.`;
-      } else if (!updatedReservationData.customerName && !userProfile?.name) {
-        reply = "Excellent! May I have a name for the reservation?";
-      } else if (!updatedReservationData.email && !updatedReservationData.phone && !userProfile?.email) {
-        reply = "Perfect! And could I get a phone number or email for confirmation?";
-      } else {
-        reply = `Perfect! Let me confirm your reservation:
-        
-Party of ${updatedReservationData.partySize}
-Date: ${updatedReservationData.date}
-Time: ${updatedReservationData.time}
-Name: ${updatedReservationData.customerName || userProfile?.name}
-Contact: ${updatedReservationData.email || updatedReservationData.phone || userProfile?.email}
-
-I'm processing your reservation now... READY_TO_BOOK`;
-      }
-
-      // Check if ready to book
-      const isReadyToBook = reply.includes("READY_TO_BOOK");
-      let action = null;
-
-      if (isReadyToBook && isReservationComplete(updatedReservationData)) {
-        try {
-          const reservationResult = await createReservation(updatedReservationData, userProfile);
-          if (reservationResult.success) {
-            action = "COMPLETE_RESERVATION";
-          }
-        } catch (error) {
-          console.error("Error creating reservation:", error);
-        }
-      }
-
-      return NextResponse.json({
-        reply: reply.replace("READY_TO_BOOK", "").trim(),
-        reservationData: updatedReservationData,
-        action
-      });
-
-    } catch (error: any) {
-      console.error("Error in fallback reservation agent:", error);
-      return NextResponse.json(
-        { error: `An error occurred: ${error.message}` },
-        { status: 500 }
-      );
-    }
+    return fallbackReservationLogic(req);
   }
 
-  // Original Google Gemini logic
   try {
     const body = await req.json();
     const { message, conversationHistory, reservationData, userProfile } = body;
 
-    console.log("Request body:", { message, reservationData, userProfile });
-
-    // Extract reservation data from the conversation
     const updatedReservationData = extractReservationData(message, reservationData, userProfile);
-    
-    console.log("Updated reservation data:", updatedReservationData);
-    console.log("Original reservation data:", reservationData);
-    console.log("Changes detected:", JSON.stringify(updatedReservationData) !== JSON.stringify(reservationData));
-
-    // Build conversation context
-    let contextMessage = `Customer message: "${message}"\n\n`;
-    
-    if (userProfile) {
-      contextMessage += `LOGGED-IN USER INFO:\n`;
-      contextMessage += `- Name: ${userProfile.name || 'Not provided'}\n`;
-      contextMessage += `- Email: ${userProfile.email}\n\n`;
-    }
-
-    if (Object.keys(updatedReservationData || {}).length > 0) {
-      contextMessage += `CURRENT RESERVATION PROGRESS:\n`;
-      if (updatedReservationData.partySize) contextMessage += `- Party size: ${updatedReservationData.partySize} people ✓\n`;
-      if (updatedReservationData.date) contextMessage += `- Date: ${updatedReservationData.date} ✓\n`;
-      if (updatedReservationData.time) contextMessage += `- Time: ${updatedReservationData.time} ✓\n`;
-      if (updatedReservationData.customerName) contextMessage += `- Name: ${updatedReservationData.customerName} ✓\n`;
-      if (updatedReservationData.email) contextMessage += `- Email: ${updatedReservationData.email} ✓\n`;
-      if (updatedReservationData.phone) contextMessage += `- Phone: ${updatedReservationData.phone} ✓\n`;
-      contextMessage += '\n';
-      
-      contextMessage += `IMPORTANT: Do NOT ask for information that already has a ✓ checkmark above. Move on to the next missing piece of information.\n\n`;
-      
-      // Check if we have all required information
-      const hasAllInfo = isReservationComplete(updatedReservationData, userProfile);
-      
-      if (hasAllInfo) {
-        contextMessage += `ALL REQUIRED INFORMATION COLLECTED! You have everything needed to complete the reservation. Do not ask for confirmation - proceed directly to book by ending with "READY_TO_BOOK".\n\n`;
-      }
-    }
-
-    contextMessage += `Please respond naturally to help complete this reservation. Extract any new information from the customer's message and guide them to the next step. Do not repeat requests for information we already have.`;
-
-    console.log("Context being sent to AI:", contextMessage);
+    const contextMessage = buildContextMessage(message, updatedReservationData, userProfile);
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
@@ -181,33 +58,45 @@ I'm processing your reservation now... READY_TO_BOOK`;
     });
 
     const result = await model.generateContent(contextMessage);
-    const response = result.response;
-    const agentReply = response.text();
+    const agentReply = result.response.text();
 
-    console.log("Agent response:", agentReply);
-
-    // Check if ready to book
-    const isReadyToBook = agentReply.includes("READY_TO_BOOK");
-    let action = null;
-
-    if (isReadyToBook && isReservationComplete(updatedReservationData, userProfile)) {
-      // Create the reservation
-      try {
-        const reservationResult = await createReservation(updatedReservationData, userProfile);
-        if (reservationResult.success) {
-          action = "COMPLETE_RESERVATION";
-        }
-      } catch (error) {
-        console.error("Error creating reservation:", error);
+    // If all required details are present, immediately create the reservation and confirm
+    if (isReservationComplete(updatedReservationData, userProfile)) {
+      const reservationResult = await createReservation(updatedReservationData, userProfile);
+      if (reservationResult.success) {
+        return NextResponse.json({
+          reply: `🎉 Your reservation is confirmed!\n\nParty of ${updatedReservationData.partySize}\nDate: ${updatedReservationData.date}\nTime: ${updatedReservationData.time}\nName: ${updatedReservationData.customerName}\nContact: ${updatedReservationData.email || updatedReservationData.phone}\n\nYou'll receive a confirmation email or text shortly. Thank you for booking with HostMate!`,
+          reservationData: updatedReservationData,
+          action: "COMPLETE_RESERVATION"
+        });
+      } else {
+        return NextResponse.json({
+          reply: `Sorry, there was a problem creating your reservation. Error: ${reservationResult.error || 'Unknown error'}`,
+          reservationData: updatedReservationData,
+          action: null
+        });
       }
     }
 
-    return NextResponse.json({
-      reply: agentReply.replace("READY_TO_BOOK", "").trim(),
-      reservationData: updatedReservationData,
-      action
-    });
+    // Otherwise, send only the clear input instruction for the next missing detail (never the Gemini reply)
+    let instruction = "";
+    if (!updatedReservationData.customerName) {
+      instruction = "Welcome! May I have your full name for the reservation? Please reply with your full name, for example: 'John Smith'.";
+    } else if (!updatedReservationData.partySize) {
+      instruction = `Thank you, ${updatedReservationData.customerName}! How many people will be in your party? Please reply with a number (e.g., '4') or a phrase like 'party of 4'.`;
+    } else if (!updatedReservationData.date) {
+      instruction = `Great! What date would you like for your reservation? Please reply with a date, for example: 'August 5th', 'tomorrow', or '11/05/2025'.`;
+    } else if (!updatedReservationData.time) {
+      instruction = `Thank you! What time would you prefer? We’re open 9:00 AM to 10:30 PM. Please reply with a time, for example: '7:30 PM' or '19:30'.`;
+    } else if (!updatedReservationData.email && !updatedReservationData.phone) {
+      instruction = "Almost done! Can I get an email or phone number for confirmation? Please reply with your email address (e.g., 'you@email.com') or phone number (e.g., '(123) 456-7890').";
+    }
 
+    return NextResponse.json({
+      reply: instruction,
+      reservationData: updatedReservationData,
+      action: null
+    });
   } catch (error: any) {
     console.error("Error in reservation agent API:", error);
     return NextResponse.json(
@@ -217,261 +106,319 @@ I'm processing your reservation now... READY_TO_BOOK`;
   }
 }
 
-function extractReservationData(message: string, currentData: any = {}, userProfile: any = null) {
-  const data = { ...currentData };
-  
-  console.log("=== EXTRACTION DEBUG ===");
-  console.log("Message:", message);
-  console.log("Current data:", data);
-  console.log("User profile:", userProfile);
-  
-  // Auto-fill user data if available
-  if (userProfile && !data.customerName && userProfile.name) {
-    data.customerName = userProfile.name;
-  }
-  if (userProfile && !data.email && userProfile.email) {
-    data.email = userProfile.email;
-  }
-
-  const lowerMessage = message.toLowerCase();
-
-  // Clear any incorrect data first
-  // If time is just a number (like "2 " or "1"), it was incorrectly extracted
-  if (data.time && data.time.match(/^\d+\s*$/)) {
-    console.log("Clearing incorrect time value:", data.time);
-    delete data.time;
-  }
-
-  // Extract party size - only if we don't already have it
-  if (!data.partySize) {
-    const partyMatches = message.match(/(\d+)\s*(?:people|person|ppl|party|of|for|guest|guests)/i);
-    if (partyMatches) {
-      const size = parseInt(partyMatches[1]);
-      if (size >= 1 && size <= 12) {
-        data.partySize = size;
-        console.log("Extracted party size:", size);
-      }
-    } else if (message.match(/^[1-9]$/) && !data.partySize) {
-      // If it's just a single digit 1-9, likely party size
-      data.partySize = parseInt(message);
-      console.log("Extracted party size from single digit:", data.partySize);
-    }
-  }
-
-  // Extract date - only if we don't already have it
-  if (!data.date) {
-    if (lowerMessage.includes('today')) {
-      data.date = 'today';
-      console.log("Extracted date: today");
-    } else if (lowerMessage.includes('tomorrow')) {
-      data.date = 'tomorrow';
-      console.log("Extracted date: tomorrow");
-    } else if (lowerMessage.match(/(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i)) {
-      const dayMatch = message.match(/(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i);
-      if (dayMatch) {
-        data.date = dayMatch[1];
-        console.log("Extracted date (day):", dayMatch[1]);
-      }
-    } else if (message.match(/(\d{1,2}\/\d{1,2}\/\d{4})/)) {
-      const dateMatch = message.match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
-      if (dateMatch) {
-        data.date = dateMatch[1];
-        console.log("Extracted date (formatted):", dateMatch[1]);
-      }
-    } else if (message.match(/(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})/i)) {
-      const monthMatch = message.match(/(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})/i);
-      if (monthMatch) {
-        data.date = `${monthMatch[1]} ${monthMatch[2]}`;
-        console.log("Extracted date (month):", `${monthMatch[1]} ${monthMatch[2]}`);
-      }
-    }
-  }
-
-  // Extract time - only if we don't already have it
-  if (!data.time) {
-    const timePattern = /(\d{1,2}):(\d{2})\s*(pm|am|p\.m\.|a\.m\.)/i;
-    const timeMatch = message.match(timePattern);
-    if (timeMatch) {
-      const hour = timeMatch[1];
-      const minute = timeMatch[2];
-      const period = timeMatch[3];
-      data.time = `${hour}:${minute} ${period.toUpperCase()}`;
-    } else {
-      // Try simpler patterns
-      const simpleTimeMatch = message.match(/(\d{1,2})\s*(pm|am)/i);
-      if (simpleTimeMatch) {
-        const hour = simpleTimeMatch[1];
-        const period = simpleTimeMatch[2];
-        data.time = `${hour}:00 ${period.toUpperCase()}`;
-      } else if (lowerMessage.includes('evening') && !lowerMessage.includes('tomorrow')) {
-        data.time = '7:00 PM';
-      } else if (lowerMessage.includes('dinner')) {
-        data.time = '7:00 PM';
-      }
-    }
-  }
-
-  // Extract name - only if we don't already have it
-  if (!data.customerName && !userProfile?.name) {
-    // Skip extraction if the message contains temporal words that might be mistaken for names
-    const hasTemporalWords = /tomorrow|evening|today|yesterday|morning|afternoon|night|weekend/i.test(message);
-    
-    if (!hasTemporalWords) {
-      const namePatterns = [
-        /(?:my name is|i'm|i am|name's|this is)\s+([a-zA-Z\s]{2,30})/i,
-        /(?:for|under)\s+([a-zA-Z\s]{2,30})/i,
-        // Check if the entire message looks like a name (First Last)
-        /^([A-Z][a-z]+\s+[A-Z][a-z]+)$/,
-        // Check for lowercase names like "john smith"
-        /^([a-z]+\s+[a-z]+)$/i
-      ];
-      
-      for (const pattern of namePatterns) {
-        const match = message.match(pattern);
-        if (match) {
-          // Capitalize the name properly
-          const name = match[1].trim().toLowerCase().split(' ')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(' ');
-          data.customerName = name;
-          console.log("Extracted name:", name);
-          break;
-        }
-      }
-    }
-  }
-
-  // Clean up invalid names that contain temporal words
-  if (data.customerName && /tomorrow|evening|today|yesterday|morning|afternoon|night|weekend/i.test(data.customerName)) {
-    console.log("Removing invalid name containing temporal words:", data.customerName);
-    delete data.customerName;
-  }
-
-  // Extract email - only if we don't already have it
-  if (!data.email && !userProfile?.email) {
-    const emailPattern = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/;
-    const emailMatch = message.match(emailPattern);
-    if (emailMatch) {
-      data.email = emailMatch[1];
-      console.log("Extracted email:", emailMatch[1]);
-    }
-  }
-
-  // Extract phone - only if we don't already have it
-  if (!data.phone) {
-    const phonePattern = /(?:\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}/;
-    const phoneMatch = message.match(phonePattern);
-    if (phoneMatch) {
-      data.phone = phoneMatch[0];
-      console.log("Extracted phone:", phoneMatch[0]);
-    }
-  }
-
-  console.log("Final extracted data:", data);
-  console.log("=== END EXTRACTION DEBUG ===");
-  return data;
-}
-
-function isReservationComplete(data: any, userProfile: any = null): boolean {
-  // For logged-in users, we can use their profile email, so phone is optional
-  if (userProfile?.id) {
-    return !!(
-      data.partySize &&
-      data.date &&
-      data.time &&
-      data.customerName &&
-      (data.email || userProfile.email)
-    );
-  }
-  
-  // For guest users, we need both email AND phone (due to database constraint)
-  return !!(
-    data.partySize &&
-    data.date &&
-    data.time &&
-    data.customerName &&
-    data.email &&
-    data.phone
-  );
-}
-
-async function createReservation(reservationData: any, userProfile: any = null) {
+async function fallbackReservationLogic(req: NextRequest) {
   try {
-    console.log("Creating reservation with data:", reservationData);
-    
-    // Parse date and time into a proper datetime
-    let reservationDate;
-    
-    if (reservationData.date === 'today') {
-      reservationDate = new Date();
-    } else if (reservationData.date === 'tomorrow') {
-      reservationDate = new Date();
-      reservationDate.setDate(reservationDate.getDate() + 1);
-    } else {
-      reservationDate = new Date(reservationData.date);
-    }
-    
-    console.log("Parsed reservation date:", reservationDate);
-    
-    // Parse time
-    console.log("Original time string:", reservationData.time);
-    const [time, period] = reservationData.time.split(/\s*(am|pm|a\.m\.|p\.m\.)/i);
-    console.log("Time parts:", { time, period });
-    const [hours, minutes = '00'] = time.split(':');
-    console.log("Hour/minute parts:", { hours, minutes });
-    
-    let hour = parseInt(hours);
-    if (period && period.toLowerCase().includes('p') && hour !== 12) {
-      hour += 12;
-    } else if (period && period.toLowerCase().includes('a') && hour === 12) {
-      hour = 0;
-    }
-    
-    console.log("Final hour:", hour, "minutes:", parseInt(minutes));
-    reservationDate.setHours(hour, parseInt(minutes), 0, 0);
-    console.log("Final reservation datetime:", reservationDate.toISOString());
+    const body = await req.json();
+    const { message, reservationData, userProfile } = body;
 
-    // Create reservation object following the same pattern as ReservationForm
-    // For authenticated users: use name/email/phone fields + user_id
-    // For guests: use guest_name/guest_email/guest_phone fields + user_id: null
-    const reservationInsertData = {
-      party_size: reservationData.partySize,
-      datetime: reservationDate.toISOString(),
-      status: 'confirmed',
-      created_at: new Date().toISOString(),
-      ...(userProfile?.id ? {
-        // Authenticated user reservation
-        user_id: userProfile.id,
-        name: reservationData.customerName,
-        email: reservationData.email || userProfile.email || null,
-        phone: reservationData.phone || null,
-      } : {
-        // Guest reservation
-        user_id: null,
-        guest_name: reservationData.customerName,
-        guest_email: reservationData.email || null,
-        guest_phone: reservationData.phone || null,
-      })
+    let updatedReservationData = {
+      ...reservationData,
+      ...extractReservationData(message, reservationData, userProfile),
     };
 
-    console.log("Inserting reservation with data:", reservationInsertData);
-
-    const { data, error } = await supabase
-      .from('reservations')
-      .insert(reservationInsertData)
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Supabase error:', error);
-      throw error;
+    if (userProfile?.name && !updatedReservationData.customerName) {
+      updatedReservationData.customerName = userProfile.name;
+    }
+    if (userProfile?.email && !updatedReservationData.email) {
+      updatedReservationData.email = userProfile.email;
     }
 
-    console.log('Reservation created:', data);
-    return { success: true, reservation: data };
-    
-  } catch (error) {
-    console.error('Error creating reservation:', error);
-    return { success: false, error };
+    // If all required details are present, immediately create the reservation and confirm
+    if (isReservationComplete(updatedReservationData, userProfile)) {
+      const reservationResult = await createReservation(updatedReservationData, userProfile);
+      if (reservationResult.success) {
+        return NextResponse.json({
+          reply: `🎉 Your reservation is confirmed!\n\nParty of ${updatedReservationData.partySize}\nDate: ${updatedReservationData.date}\nTime: ${updatedReservationData.time}\nName: ${updatedReservationData.customerName}\nContact: ${updatedReservationData.email || updatedReservationData.phone}\n\nYou'll receive a confirmation email or text shortly. Thank you for booking with HostMate!`,
+          reservationData: updatedReservationData,
+          action: "COMPLETE_RESERVATION"
+        });
+      } else {
+        return NextResponse.json({
+          reply: `Sorry, there was a problem creating your reservation. Please try again or contact us directly.`,
+          reservationData: updatedReservationData,
+          action: null
+        });
+      }
+    }
+
+    // Otherwise, ask for only one missing detail at a time, never combining date and time
+    let reply = "";
+    if (!updatedReservationData.customerName) {
+      reply = "Welcome! May I have your full name for the reservation? Please reply with your full name, for example: 'John Smith'.";
+    } else if (!updatedReservationData.partySize) {
+      reply = `Thank you, ${updatedReservationData.customerName}! How many people will be in your party? Please reply with a number (e.g., '4') or a phrase like 'party of 4'.`;
+    } else if (!updatedReservationData.date) {
+      reply = `Great! What date would you like for your reservation? Please reply with a date, for example: 'August 5th', 'tomorrow', or '11/05/2025'.`;
+    } else if (!updatedReservationData.time) {
+      reply = `Thank you! What time would you prefer? We’re open 9:00 AM to 10:30 PM. Please reply with a time, for example: '7:30 PM' or '19:30'.`;
+    } else if (!updatedReservationData.email && !updatedReservationData.phone) {
+      reply = "Almost done! Can I get an email or phone number for confirmation? Please reply with your email address (e.g., 'you@email.com') or phone number (e.g., '(123) 456-7890').";
+    }
+
+    return NextResponse.json({
+      reply,
+      reservationData: updatedReservationData,
+      action: null
+    });
+  } catch (error: any) {
+    console.error("Fallback error:", error);
+    return NextResponse.json(
+      { error: `An error occurred in fallback: ${error.message}` },
+      { status: 500 }
+    );
+  }
+}
+
+// Checks if all required reservation details are present
+function isReservationComplete(reservationData: any, userProfile: any): boolean {
+  const hasPartySize = !!reservationData?.partySize;
+  const hasDate = !!reservationData?.date;
+  const hasTime = !!reservationData?.time;
+  const hasCustomerName = !!reservationData?.customerName || !!userProfile?.name;
+  const hasContact = !!reservationData?.email || !!reservationData?.phone || !!userProfile?.email || !!userProfile?.phone;
+  return hasPartySize && hasDate && hasTime && hasCustomerName && hasContact;
+}
+
+// Example implementation for buildContextMessage
+function buildContextMessage(
+  message: string,
+  reservationData: any,
+  userProfile: any
+): string {
+  // You can enhance this function to include more context as needed
+  let context = `User message: ${message}\n`;
+  if (reservationData) {
+    context += `Reservation data: ${JSON.stringify(reservationData)}\n`;
+  }
+  if (userProfile) {
+    context += `User profile: ${JSON.stringify(userProfile)}\n`;
+  }
+  return context;
+}
+
+// Example implementation for extractReservationData
+function extractReservationData(
+  message: string,
+  reservationData: any,
+  userProfile: any
+): any {
+  // Basic extraction logic using regex for party size, date, time, name, email, and phone
+  let updated = { ...reservationData };
+
+  // Party size (always use latest user input, support multiple details in one message)
+  const numberWords: { [key: string]: number } = {
+    'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+    'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+    'eleven': 11, 'twelve': 12
+  };
+  let lastPartySize = null;
+  // Find all party size matches, even if mixed with other details
+  const partySizeRegexAll = /(party of|table for|for)\s*(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/gi;
+  let match;
+  while ((match = partySizeRegexAll.exec(message.toLowerCase())) !== null) {
+    let size = parseInt(match[2], 10);
+    if (isNaN(size)) size = numberWords[match[2]];
+    if (size > 0 && size < 100) lastPartySize = size;
+  }
+  // Also check for single number/word if message is just a number/word
+  if (lastPartySize === null) {
+    const singlePartySize = message.trim().toLowerCase();
+    if (numberWords[singlePartySize]) lastPartySize = numberWords[singlePartySize];
+    else if (/^\d{1,2}$/.test(singlePartySize)) lastPartySize = parseInt(singlePartySize, 10);
+  }
+  if (lastPartySize !== null) {
+    updated.partySize = lastPartySize;
+  }
+
+  // Date (always use latest user input, support month abbreviations)
+  const isoDateMatch = message.match(/(\d{4}-\d{2}-\d{2})/);
+  const usDateMatch = message.match(/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/);
+  // Support both full and abbreviated months
+  const monthNames = [
+    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december',
+    'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec'
+  ];
+  const monthDayMatch = message.match(new RegExp(`(${monthNames.join('|')})\\s+\\d{1,2}(st|nd|rd|th)?`, 'i'));
+  const tomorrowMatch = /tomorrow/i.test(message);
+  const todayMatch = /today/i.test(message);
+  if (isoDateMatch) {
+    updated.date = isoDateMatch[1];
+  } else if (usDateMatch) {
+    const parts = usDateMatch[1].split(/[\/\-]/);
+    if (parts[2].length === 2) parts[2] = '20' + parts[2];
+    updated.date = `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`;
+  } else if (monthDayMatch) {
+    const now = new Date();
+    let month = monthDayMatch[1].toLowerCase();
+    let dayMatch = monthDayMatch[0].match(/\d{1,2}/);
+    if (dayMatch) {
+      const day = dayMatch[0];
+      // Map abbreviations to month number
+      let monthNum = monthNames.indexOf(month) % 12 + 1;
+      updated.date = `${now.getFullYear()}-${String(monthNum).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  } else if (tomorrowMatch) {
+    const now = new Date();
+    now.setDate(now.getDate() + 1);
+    updated.date = now.toISOString().slice(0, 10);
+  } else if (todayMatch) {
+    const now = new Date();
+    updated.date = now.toISOString().slice(0, 10);
+  }
+
+  // Time (always use latest user input)
+  let timeMatch = null;
+  const timePatterns = [
+    /(\d{1,2}):(\d{2})\s*(am|pm)?/i, // 7:30 PM, 19:30
+    /(\d{1,2})\s*(am|pm)/i,          // 7 pm, 2 am
+    /at\s*(\d{1,2})(?:\s*(am|pm))?/i // at 5, at 5pm
+  ];
+  for (const pattern of timePatterns) {
+    const match = message.match(pattern);
+    if (match) {
+      timeMatch = match;
+      break;
+    }
+  }
+  if (timeMatch) {
+    let hour = 0;
+    let minute = 0;
+    let ampm = null;
+    if (timeMatch[0].toLowerCase().includes('at')) {
+      hour = parseInt(timeMatch[1], 10);
+      minute = 0;
+      ampm = timeMatch[2] ? timeMatch[2].toLowerCase() : null;
+    } else {
+      hour = parseInt(timeMatch[1], 10);
+      minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+      ampm = timeMatch[3] ? timeMatch[3].toLowerCase() : null;
+    }
+    // Improved ambiguous time handling for restaurant context
+    if (!ampm) {
+      if (hour === 9) {
+        ampm = 'am'; // 9 defaults to 9 AM
+      } else if (hour >= 1 && hour <= 8) {
+        ampm = 'pm'; // 1-8 default to PM
+      } else if (hour === 10) {
+        ampm = 'pm'; // 10 defaults to PM (dinner)
+      } else if (hour === 11 || hour === 12) {
+        ampm = 'am'; // 11/12 default to AM (brunch/lunch)
+      }
+    }
+    if (ampm) {
+      if (ampm === 'pm' && hour < 12) hour += 12;
+      if (ampm === 'am' && hour === 12) hour = 0;
+    }
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      updated.time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    }
+  }
+
+  // Name: only update if a new one is detected in the latest message, ignore confirmations and party size words, and do not overwrite if already set
+  let detectedName: string | null = null;
+  const confirmationWords = [
+    'yes', 'yeah', 'yep', 'yup', 'no', 'nope', 'sure', 'ok', 'okay', 'confirm', 'confirmed', 'correct', 'right', 'absolutely', 'of course', 'please', 'thanks', 'thank you'
+  ];
+  const dateTimeWords = [
+    'tomorrow', 'today', 'tonight', 'morning', 'afternoon', 'evening', 'night',
+    'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december',
+    'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec'
+  ];
+  const partySizeWords = [
+    'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve',
+    '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'
+  ];
+  const nameMatch = message.match(/my name is ([a-zA-Z\s\-']{2,})/i);
+  if (nameMatch) {
+    detectedName = nameMatch[1].trim();
+  } else {
+    const simpleName = message.trim();
+    const lowerSimple = simpleName.toLowerCase();
+    if (
+      /^[a-zA-Z][a-zA-Z\s\-']{1,40}$/.test(simpleName) &&
+      simpleName.split(/\s+/).length <= 3 &&
+      !confirmationWords.includes(lowerSimple) &&
+      !dateTimeWords.includes(lowerSimple) &&
+      !partySizeWords.includes(lowerSimple)
+    ) {
+      detectedName = simpleName;
+    }
+  }
+  if (detectedName && !updated.customerName) {
+    updated.customerName = detectedName;
+  }
+
+  // Email (always use latest user input)
+  const emailMatch = message.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  if (emailMatch) {
+    updated.email = emailMatch[0];
+  }
+
+  // Phone (always use latest user input)
+  const phoneMatch = message.match(/(\+?1[\s.-]?)?(\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})/);
+  if (phoneMatch) {
+    updated.phone = phoneMatch[0];
+  }
+
+  return updated;
+}
+
+// Create a reservation in the database (Supabase)
+async function createReservation(reservationData: any, userProfile: any) {
+  try {
+    const { partySize, date, time, customerName, email, phone } = reservationData;
+    // Use guest fields for guest reservations (no user_id)
+    const isGuest = !userProfile?.id && (!reservationData.user_id || reservationData.user_id === null);
+    let insertObj: any = {
+      party_size: partySize,
+      datetime: date && time ? new Date(`${date}T${time}`).toISOString() : null,
+      created_at: new Date().toISOString(),
+    };
+    if (isGuest) {
+      insertObj.guest_name = customerName;
+      insertObj.guest_email = email;
+      insertObj.guest_phone = phone;
+    } else {
+      insertObj.customer_name = customerName || userProfile?.name || null;
+      insertObj.email = email || userProfile?.email || null;
+      insertObj.phone = phone || userProfile?.phone || null;
+      if (userProfile?.id) insertObj.user_id = userProfile.id;
+    }
+
+    // Prevent duplicate reservations: check for existing reservation with same email/phone, date, and time
+    let contactField = email ? 'email' : 'phone';
+    let contactValue = email || phone;
+    let datetime = date && time ? new Date(`${date}T${time}`).toISOString() : null;
+    let duplicateCheck = null;
+    if (contactValue && datetime) {
+      const { data: existing, error: checkError } = await supabase
+        .from('reservations')
+        .select('*')
+        .or(`email.eq.${email},guest_email.eq.${email},phone.eq.${phone},guest_phone.eq.${phone}`)
+        .eq('datetime', datetime)
+        .limit(1);
+      if (checkError) {
+        console.error('Supabase duplicate check error:', checkError);
+        return { success: false, error: checkError.message };
+      }
+      if (existing && existing.length > 0) {
+        return { success: false, error: 'A reservation already exists for this contact, date, and time.' };
+      }
+    }
+
+    const { data, error } = await supabase
+      .from("reservations")
+      .insert([insertObj])
+      .select();
+
+    if (error) {
+      console.error("Supabase reservation insert error:", error);
+      return { success: false, error: error.message };
+    }
+    return { success: true, data };
+  } catch (err: any) {
+    console.error("createReservation error:", err);
+    return { success: false, error: err.message };
   }
 }

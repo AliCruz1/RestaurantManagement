@@ -22,7 +22,7 @@ export default function ReservationAgent() {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'agent',
-      content: "Hello! I'm your reservation assistant. I'll help you book the perfect table. What size party are you planning for?",
+      content: "Welcome to HostMate! May I have your full name for the reservation?",
       timestamp: new Date()
     }
   ]);

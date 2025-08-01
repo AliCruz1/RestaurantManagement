@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/lib/authContext";
+import { LightBulbIcon } from "@heroicons/react/24/outline";
 
 export default function ReservationForm() {
   const { user, loading } = useAuth();
@@ -223,8 +224,9 @@ export default function ReservationForm() {
       
       {!user && (
         <div className="mt-6 p-4 bg-purple-900/20 border border-purple-500/30 rounded-lg">
-          <p className="text-sm text-purple-200 text-center">
-            💡 <strong>Tip:</strong> Sign in to manage your reservations easily and save time on future bookings!
+          <p className="text-sm text-purple-200 text-center flex items-center justify-center gap-2">
+            <LightBulbIcon className="h-12 w-12 text-purple-400" />
+            <span><strong>Tip:</strong> Sign in to manage your reservations easily and save time on future bookings!</span>
           </p>
         </div>
       )}

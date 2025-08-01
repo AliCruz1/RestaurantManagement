@@ -8,7 +8,8 @@ import { Bar, Line } from "react-chartjs-2";
 import { Chart, CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend } from "chart.js";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HomeIcon, UserGroupIcon, ChartBarIcon, Cog6ToothIcon, BuildingStorefrontIcon, CircleStackIcon, ServerStackIcon, CheckCircleIcon, XCircleIcon, ClockIcon, QuestionMarkCircleIcon, UserIcon, LockClosedIcon } from "@heroicons/react/24/outline";
+import { HomeIcon, UserGroupIcon, ChartBarIcon, Cog6ToothIcon, BuildingStorefrontIcon, CircleStackIcon, ServerStackIcon, CheckCircleIcon, XCircleIcon, ClockIcon, QuestionMarkCircleIcon, UserIcon, LockClosedIcon, LightBulbIcon } from "@heroicons/react/24/outline";
+import { SortIcon, InfoIcon } from "@/components/ui/sort-icons";
 
 Chart.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend);
 
@@ -294,6 +295,14 @@ export default function AdminDashboard() {
   const [editingReservation, setEditingReservation] = useState<string | null>(null);
   const [editedReservation, setEditedReservation] = useState<any>({});
   const [showAddForm, setShowAddForm] = useState(false);
+  // Reservation sort state
+  const [reservationSort, setReservationSort] = useState<
+    'datetime-asc' | 'datetime-desc' |
+    'name-asc' | 'name-desc' |
+    'party-asc' | 'party-desc' |
+    'status-asc' | 'status-desc' |
+    'type-asc' | 'type-desc'
+  >('datetime-asc');
   const [newReservation, setNewReservation] = useState({
     name: '',
     email: '',
@@ -1525,6 +1534,29 @@ export default function AdminDashboard() {
                 })()}
               </span>
             </div>
+            {/* Reservation sort dropdown, only show in reservations section */}
+            {activeSection === "reservations" && (
+              <div className="flex items-center gap-2 ml-8">
+                <label htmlFor="reservation-sort" className="text-sm text-gray-300 mr-2">Sort by:</label>
+                <select
+                  id="reservation-sort"
+                  className="bg-[#23232a] text-white rounded px-2 py-1 text-sm border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  value={reservationSort}
+                  onChange={e => setReservationSort(e.target.value as any)}
+                >
+                  <option value="datetime-asc">Date/Time (Oldest First)</option>
+                  <option value="datetime-desc">Date/Time (Newest First)</option>
+                  <option value="name-asc">Name (A-Z)</option>
+                  <option value="name-desc">Name (Z-A)</option>
+                  <option value="party-asc">Party Size (Smallest First)</option>
+                  <option value="party-desc">Party Size (Largest First)</option>
+                  <option value="status-asc">Status (A-Z)</option>
+                  <option value="status-desc">Status (Z-A)</option>
+                  <option value="type-asc">Account Type (Guest First)</option>
+                  <option value="type-desc">Account Type (User First)</option>
+                </select>
+              </div>
+            )}
           </div>
           {/* Dashboard Section */}
           {activeSection === "dashboard" && (
@@ -2121,19 +2153,121 @@ export default function AdminDashboard() {
                     <table className="min-w-full text-sm bg-[#18181b] rounded-lg overflow-hidden">
                       <thead>
                         <tr className="bg-[#111113] text-white border-b border-gray-600">
-                          <th className="p-4 text-left font-semibold text-white">Name</th>
+                          <th
+                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group"
+                            onClick={() => setReservationSort(prev => prev === 'name-asc' ? 'name-desc' : 'name-asc')}
+                            title="Sort by Name"
+                          >
+                            <div className="flex items-center gap-1">
+                              Name
+                              {(reservationSort === 'name-asc' || reservationSort === 'name-desc') && (
+                                <SortIcon direction={reservationSort === 'name-asc' ? 'asc' : 'desc'} color="text-blue-400" />
+                              )}
+                              <InfoIcon />
+                            </div>
+                          </th>
                           <th className="p-4 text-left font-semibold text-white">Email</th>
                           <th className="p-4 text-left font-semibold text-white">Phone</th>
-                          <th className="p-4 text-left font-semibold text-white">Party Size</th>
-                          <th className="p-4 text-left font-semibold text-white">Date/Time</th>
-                          <th className="p-4 text-left font-semibold text-white">Status</th>
-                          <th className="p-4 text-left font-semibold text-white">Type</th>
+                          <th
+                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group"
+                            onClick={() => setReservationSort(prev => prev === 'party-asc' ? 'party-desc' : 'party-asc')}
+                            title="Sort by Party Size"
+                          >
+                            <div className="flex items-center gap-1">
+                              Party Size
+                              {(reservationSort === 'party-asc' || reservationSort === 'party-desc') && (
+                                <SortIcon direction={reservationSort === 'party-asc' ? 'asc' : 'desc'} color="text-green-400" />
+                              )}
+                              <InfoIcon />
+                            </div>
+                          </th>
+                          <th
+                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group"
+                            onClick={() => setReservationSort(prev => prev === 'datetime-asc' ? 'datetime-desc' : 'datetime-asc')}
+                            title="Sort by Date/Time"
+                          >
+                            <div className="flex items-center gap-1">
+                              Date/Time
+                              {(reservationSort === 'datetime-asc' || reservationSort === 'datetime-desc') && (
+                                <SortIcon direction={reservationSort === 'datetime-asc' ? 'asc' : 'desc'} color="text-purple-400" />
+                              )}
+                              <InfoIcon />
+                            </div>
+                          </th>
+                          <th
+                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group"
+                            onClick={() => setReservationSort(prev => prev === 'status-asc' ? 'status-desc' : 'status-asc')}
+                            title="Sort by Status"
+                          >
+                            <div className="flex items-center gap-1">
+                              Status
+                              {(reservationSort === 'status-asc' || reservationSort === 'status-desc') && (
+                                <SortIcon direction={reservationSort === 'status-asc' ? 'asc' : 'desc'} color="text-yellow-400" />
+                              )}
+                              <InfoIcon />
+                            </div>
+                          </th>
+                          <th
+                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group"
+                            onClick={() => setReservationSort(prev => prev === 'type-asc' ? 'type-desc' : 'type-asc')}
+                            title="Sort by Account Type"
+                          >
+                            <div className="flex items-center gap-1">
+                              Type
+                              {(reservationSort === 'type-asc' || reservationSort === 'type-desc') && (
+                                <SortIcon direction={reservationSort === 'type-asc' ? 'asc' : 'desc'} color="text-blue-400" />
+                              )}
+                              <InfoIcon />
+                            </div>
+                          </th>
                           <th className="p-4 text-left font-semibold text-white">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="bg-[#18181b]">
-                        {reservations.length > 0 ? (
-                          reservations.map((r) => (
+                        {(() => {
+                          // Sort reservations based on reservationSort
+                          let sortedReservations = [...reservations];
+                          if (reservationSort === 'datetime-asc') {
+                            sortedReservations.sort((a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime());
+                          } else if (reservationSort === 'datetime-desc') {
+                            sortedReservations.sort((a, b) => new Date(b.datetime).getTime() - new Date(a.datetime).getTime());
+                          } else if (reservationSort === 'name-asc') {
+                            sortedReservations.sort((a, b) => {
+                              const nameA = (a.displayName || '').toLowerCase();
+                              const nameB = (b.displayName || '').toLowerCase();
+                              return nameA.localeCompare(nameB);
+                            });
+                          } else if (reservationSort === 'name-desc') {
+                            sortedReservations.sort((a, b) => {
+                              const nameA = (a.displayName || '').toLowerCase();
+                              const nameB = (b.displayName || '').toLowerCase();
+                              return nameB.localeCompare(nameA);
+                            });
+                          } else if (reservationSort === 'party-asc') {
+                            sortedReservations.sort((a, b) => a.party_size - b.party_size);
+                          } else if (reservationSort === 'party-desc') {
+                            sortedReservations.sort((a, b) => b.party_size - a.party_size);
+                          } else if (reservationSort === 'status-asc') {
+                            sortedReservations.sort((a, b) => {
+                              const statusA = (a.status || '').toLowerCase();
+                              const statusB = (b.status || '').toLowerCase();
+                              return statusA.localeCompare(statusB);
+                            });
+                          } else if (reservationSort === 'status-desc') {
+                            sortedReservations.sort((a, b) => {
+                              const statusA = (a.status || '').toLowerCase();
+                              const statusB = (b.status || '').toLowerCase();
+                              return statusB.localeCompare(statusA);
+                            });
+                          } else if (reservationSort === 'type-asc') {
+                            // Guest first, then user
+                            sortedReservations.sort((a, b) => (a.isGuest === b.isGuest) ? 0 : a.isGuest ? -1 : 1);
+                          } else if (reservationSort === 'type-desc') {
+                            // User first, then guest
+                            sortedReservations.sort((a, b) => (a.isGuest === b.isGuest) ? 0 : a.isGuest ? 1 : -1);
+                          }
+                          return sortedReservations.length > 0 ? (
+                            sortedReservations.map((r) => (
                             <tr key={r.id} className="border-b border-gray-600 hover:bg-[#23232a] transition-colors">
                               {/* Name Cell */}
                               <td className="p-4">
@@ -2307,13 +2441,14 @@ export default function AdminDashboard() {
                               </td>
                             </tr>
                           ))
-                        ) : (
-                          <tr>
-                            <td colSpan={8} className="text-gray-400 text-center py-8 bg-[#18181b]">
-                              {reservationsLoading ? "Loading reservations..." : "No reservations found. Click 'Add Reservation' to create your first booking."}
-                            </td>
-                          </tr>
-                        )}
+                          ) : (
+                            <tr>
+                              <td colSpan={8} className="text-gray-400 text-center py-8 bg-[#18181b]">
+                                {reservationsLoading ? "Loading reservations..." : "No reservations found. Click 'Add Reservation' to create your first booking."}
+                              </td>
+                            </tr>
+                          );
+                        })()}
                       </tbody>
                     </table>
                   </div>
@@ -2359,7 +2494,7 @@ export default function AdminDashboard() {
                 {/* Instructions */}
                 <div className="mb-4 p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg">
                   <div className="text-sm text-blue-300 flex items-center gap-2">
-                    <span className="text-blue-400">💡</span>
+                    <LightBulbIcon className="h-4 w-4 text-blue-400" />
                     <span><strong>Double-click</strong> any table to edit schema • <strong>Drag</strong> to reposition • <strong>Red X</strong> to delete</span>
                   </div>
                 </div>
