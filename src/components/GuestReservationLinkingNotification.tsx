@@ -25,10 +25,8 @@ export default function GuestReservationLinkingNotification() {
     const success = await linkReservations();
     
     if (success) {
-      setMessage(`Successfully linked ${linkableReservations.length} reservation${linkableReservations.length === 1 ? '' : 's'} to your account!`);
-      setTimeout(() => {
-        setMessage('');
-      }, 5000);
+      setMessage(`Successfully linked ${linkableReservations.length} reservation${linkableReservations.length === 1 ? '' : 's'} to your account! Refreshing page to show your reservations...`);
+      // The linkReservations function will handle the page refresh
     } else {
       setMessage('Failed to link reservations. Please try again.');
     }

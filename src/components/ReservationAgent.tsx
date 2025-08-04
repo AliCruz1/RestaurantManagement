@@ -31,6 +31,7 @@ export default function ReservationAgent() {
   const [isOpen, setIsOpen] = useState(false);
   const [reservationData, setReservationData] = useState<ReservationData>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -39,6 +40,15 @@ export default function ReservationAgent() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Auto-focus input when chat is opened
+  useEffect(() => {
+    if (isOpen) {
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 100);
+    }
+  }, [isOpen]);
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,6 +120,10 @@ export default function ReservationAgent() {
       }]);
     } finally {
       setLoading(false);
+      // Focus the input field after the conversation is complete
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 100);
     }
   };
 
@@ -213,6 +227,7 @@ export default function ReservationAgent() {
       <form onSubmit={sendMessage} className="p-4 border-t border-gray-700">
         <div className="flex space-x-2">
           <input
+            ref={inputRef}
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}

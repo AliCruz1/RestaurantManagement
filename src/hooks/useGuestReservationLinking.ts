@@ -60,6 +60,12 @@ export function useGuestReservationLinking() {
 
       // Clear the linkable reservations since they've been linked
       setLinkableReservations([]);
+      
+      // Refresh the page after successful linking so user can see their linked reservations
+      setTimeout(() => {
+        window.location.reload();
+      }, 2000); // 2 second delay to show the success message first
+      
       return true;
     } catch (err) {
       console.error('Error in linkReservations:', err);

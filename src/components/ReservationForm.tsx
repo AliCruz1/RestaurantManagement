@@ -137,7 +137,7 @@ export default function ReservationForm() {
   };
 
   return (
-    <div className="bg-[#23232a]/90 backdrop-blur-sm rounded-xl p-8 max-w-sm mx-auto mt-8 shadow-2xl border border-gray-700/50">
+    <div className="bg-black/30 backdrop-blur-lg rounded-xl p-8 max-w-sm mx-auto mt-8 shadow-2xl border border-gray-700/50">
       <h2 className="text-2xl font-bold text-white mb-6 text-center drop-shadow-lg">Book a Table</h2>
       <form onSubmit={handleSubmit} className="space-y-4">
         <input
@@ -217,7 +217,7 @@ export default function ReservationForm() {
 
         {error && <div className="text-red-400 text-sm">{error}</div>}
         {status && <div className="text-green-400 text-sm">{status}</div>}
-        <button type="submit" className="w-full px-4 py-3 bg-white text-black rounded-lg hover:bg-gray-200 transition-colors font-semibold">
+        <button type="submit" className="w-full px-4 py-3 bg-white text-black rounded-lg hover:bg-gray-200 transition-colors font-semibold cursor-pointer">
           Reserve Table
         </button>
       </form>

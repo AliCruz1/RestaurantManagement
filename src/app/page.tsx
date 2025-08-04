@@ -57,7 +57,7 @@ function HomeContent() {
     <div className="font-sans bg-[#18181b] text-white min-h-screen flex flex-col">
       {/* User Status Header */}
       {session && (
-        <header className="fixed top-0 left-0 right-0 p-4 flex justify-end items-center z-50">
+        <header className="fixed top-0 left-0 right-0 p-4 flex justify-end items-center z-60" style={{ zIndex: 9999, pointerEvents: 'auto' }}>
           <div className="bg-black/30 backdrop-blur-lg rounded-xl p-2 flex items-center gap-4">
             <span className="text-sm text-gray-300 pl-2">Welcome, {profile?.name || session.user.email}</span>
             <button
@@ -65,7 +65,8 @@ function HomeContent() {
                 await supabase.auth.signOut();
                 window.location.reload();
               }}
-              className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm"
+              className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm cursor-pointer"
+              style={{ zIndex: 10000, pointerEvents: 'auto', position: 'relative' }}
             >
               Sign Out
             </button>
@@ -93,11 +94,11 @@ function HomeContent() {
 
               {/* Show reservations if logged in */}
               {session && userReservations.length > 0 && (
-                <div className="w-full max-w-2xl bg-[#23232a]/80 backdrop-blur-sm rounded-xl border border-gray-700/50 p-6">
+                <div className="w-full max-w-2xl bg-black/30 backdrop-blur-lg rounded-xl border border-gray-700/50 p-6">
                   <h2 className="text-2xl font-bold text-white mb-4">My Upcoming Reservations</h2>
                   <div className="space-y-4">
                     {userReservations.map(r => (
-                      <div key={r.id} className="bg-[#2a2a32] p-4 rounded-lg flex justify-between items-center">
+                      <div key={r.id} className="bg-black/30 backdrop-blur-lg rounded-xl border border-gray-700/50 p-4 flex justify-between items-center">
                         <div>
                           <p className="font-bold text-purple-400">Party of {r.party_size}</p>
                           <p className="text-sm text-gray-300">
@@ -135,7 +136,7 @@ function HomeContent() {
 
               
               
-              <div className="text-center mt-8 p-6 bg-[#23232a]/60 backdrop-blur-sm rounded-xl border border-gray-700/50 max-w-2xl">
+              <div className="text-center mt-8 p-6 bg-black/30 backdrop-blur-lg rounded-xl border border-gray-700/50 max-w-2xl">
                 <h3 className="text-lg font-semibold text-white mb-3">About Our Restaurant</h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-gray-300">
                   <div>

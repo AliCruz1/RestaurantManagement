@@ -67,7 +67,7 @@ Email: ${reservation.displayEmail}
 Phone: ${reservation.displayPhone}
 Party Size: ${reservation.party_size} ${reservation.party_size === 1 ? 'Guest' : 'Guests'}
 Date & Time: ${new Date(reservation.datetime).toLocaleString()}
-Status: ${reservation.status === 'confirmed' ? 'Confirmed ✓' : 'Pending Review ⏳'}
+Status: ${reservation.status === 'approved' ? 'Approved ✓' : 'Pending Review ⏳'}
 
 Reservation ID: ${reservation.reservation_token}
 

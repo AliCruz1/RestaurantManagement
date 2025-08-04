@@ -8,8 +8,11 @@ import { Bar, Line } from "react-chartjs-2";
 import { Chart, CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend } from "chart.js";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HomeIcon, UserGroupIcon, ChartBarIcon, Cog6ToothIcon, BuildingStorefrontIcon, CircleStackIcon, ServerStackIcon, CheckCircleIcon, XCircleIcon, ClockIcon, QuestionMarkCircleIcon, UserIcon, LockClosedIcon, LightBulbIcon } from "@heroicons/react/24/outline";
+import { Input } from "@/components/ui/input";
+import { HomeIcon, UserGroupIcon, ChartBarIcon, Cog6ToothIcon, BuildingStorefrontIcon, CircleStackIcon, ServerStackIcon, CheckCircleIcon, XCircleIcon, ClockIcon, QuestionMarkCircleIcon, UserIcon, LockClosedIcon, LightBulbIcon, CubeIcon, ExclamationTriangleIcon } from "@heroicons/react/24/outline";
 import { SortIcon, InfoIcon } from "@/components/ui/sort-icons";
+import InventoryManagement from "@/components/InventoryManagement";
+import { toast, Toaster } from "sonner";
 
 Chart.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend);
 
@@ -94,20 +97,38 @@ export default function AdminDashboard() {
         } : null);
         
         // Show success feedback
-        alert("Profile updated successfully!");
+        toast.success("Profile updated successfully", {
+          description: "Your admin profile settings have been saved"
+        });
       } else {
         console.error("Supabase error:", error);
         
         // If it's a column error, suggest running the SQL
         if (error.message.includes("column")) {
-          alert(`Database schema issue: ${error.message}\n\nPlease run this SQL in your Supabase dashboard:\n\nALTER TABLE public.profiles \nADD COLUMN IF NOT EXISTS name TEXT,\nADD COLUMN IF NOT EXISTS phone TEXT,\nADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
+          toast.error("Database schema issue", {
+            description: `Missing column: ${error.message}`,
+            action: {
+              label: "Copy SQL Fix",
+              onClick: () => {
+                navigator.clipboard.writeText(`ALTER TABLE public.profiles 
+ADD COLUMN IF NOT EXISTS name TEXT,
+ADD COLUMN IF NOT EXISTS phone TEXT,
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
+                toast.success("SQL fix copied to clipboard");
+              }
+            }
+          });
         } else {
-          alert(`Error updating profile: ${error.message}`);
+          toast.error("Failed to update profile", {
+            description: error.message
+          });
         }
       }
     } catch (error) {
       console.error("Error saving profile:", error);
-      alert(`Error updating profile: ${error}`);
+      toast.error("Failed to update profile", {
+        description: `Unexpected error: ${error}`
+      });
     } finally {
       setSettingsSaving(false);
     }
@@ -292,6 +313,8 @@ export default function AdminDashboard() {
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
   const [reservations, setReservations] = useState<any[]>([]);
   const [reservationsLoading, setReservationsLoading] = useState(false);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [deleteAllLoading, setDeleteAllLoading] = useState(false);
   const [editingReservation, setEditingReservation] = useState<string | null>(null);
   const [editedReservation, setEditedReservation] = useState<any>({});
   const [showAddForm, setShowAddForm] = useState(false);
@@ -303,6 +326,8 @@ export default function AdminDashboard() {
     'status-asc' | 'status-desc' |
     'type-asc' | 'type-desc'
   >('datetime-asc');
+  // Reservation search state
+  const [reservationSearch, setReservationSearch] = useState('');
   const [newReservation, setNewReservation] = useState({
     name: '',
     email: '',
@@ -331,7 +356,33 @@ export default function AdminDashboard() {
     reservationRate: '',
     wastePercent: '',
   });
-  const [activeSection, setActiveSection] = useState("dashboard");
+
+  // Auto-calculated metrics from reservation data
+  const [autoMetrics, setAutoMetrics] = useState<{
+    dailyCovers: number;
+    reservationRate: number;
+    estimatedRevenue: number;
+    avgPartySize: number;
+    confirmedReservations: number;
+    totalReservations: number;
+  }>({
+    dailyCovers: 0,
+    reservationRate: 0,
+    estimatedRevenue: 0,
+    avgPartySize: 0,
+    confirmedReservations: 0,
+    totalReservations: 0,
+  });
+
+  const [activeSection, setActiveSection] = useState<"dashboard" | "dataentry" | "inventory" | "reservations" | "database" | "staff" | "settings">("dashboard");
+  
+  // Staff management state
+  const [staffMembers, setStaffMembers] = useState<any[]>([]);
+  const [showAddStaffForm, setShowAddStaffForm] = useState(false);
+  const [editingStaff, setEditingStaff] = useState<string | null>(null);
+  const [editingStaffData, setEditingStaffData] = useState<any>(null);
+  const [staffSearch, setStaffSearch] = useState('');
+  const [loadingStaff, setLoadingStaff] = useState(false);
   
   // Data entry specific state
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -605,12 +656,11 @@ export default function AdminDashboard() {
           guest_phone,
           status
         `)
-        .not('status', 'eq', 'cancelled') // Exclude cancelled reservations
         .order('datetime', { ascending: true });
       
       if (error) {
         console.error("Error fetching reservations:", error);
-        alert(`Error fetching reservations: ${error.message}`);
+        toast.error(`Error fetching reservations: ${error.message}`);
         setReservationsLoading(false);
         return;
       }
@@ -639,11 +689,148 @@ export default function AdminDashboard() {
           partySizeDistribution: { labels: [], datasets: [{ label: 'Party Size Distribution', data: [], backgroundColor: [], borderWidth: 0 }] }
         });
       }
+
+      // Calculate auto-metrics for the currently selected date
+      calculateAutoMetrics(selectedDate);
     } catch (error) {
       console.error("Error in fetchReservations:", error);
-      alert(`Error fetching reservations: ${error}`);
+      toast.error(`Error fetching reservations: ${error}`);
     } finally {
       setReservationsLoading(false);
+    }
+  };
+
+  const handleCleanupPastReservations = async () => {
+    setCleanupLoading(true);
+    try {
+      const response = await fetch("/api/cleanup-past-reservations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to cleanup reservations");
+      }
+
+      toast.success(
+        `Successfully cleaned up ${data.deletedCount} past reservations${
+          data.emailQueueCount > 0 ? ` and ${data.emailQueueCount} email queue entries` : ""
+        }`,
+        {
+          duration: 5000,
+          style: {
+            background: '#10b981',
+            color: 'white',
+            border: 'none',
+            borderRadius: '8px',
+            fontSize: '14px',
+            fontWeight: '500'
+          }
+        }
+      );
+
+      // Refresh reservations to reflect cleanup
+      await fetchReservations();
+    } catch (error) {
+      console.error("Error cleaning up reservations:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to cleanup past reservations",
+        {
+          duration: 5000,
+          style: {
+            background: '#ef4444',
+            color: 'white',
+            border: 'none',
+            borderRadius: '8px',
+            fontSize: '14px',
+            fontWeight: '500'
+          }
+        }
+      );
+    } finally {
+      setCleanupLoading(false);
+    }
+  };
+
+  const handleDeleteAllReservations = async () => {
+    // Show confirmation dialog
+    const confirmed = window.confirm(
+      "⚠️ WARNING: This will permanently delete ALL reservations from the database!\n\n" +
+      "This action cannot be undone. Are you absolutely sure you want to continue?\n\n" +
+      "This is intended for testing purposes only."
+    );
+
+    if (!confirmed) return;
+
+    // Double confirmation for safety
+    const doubleConfirmed = window.confirm(
+      "🚨 FINAL WARNING 🚨\n\n" +
+      "You are about to delete ALL reservations permanently.\n\n" +
+      "Type 'DELETE ALL' in the next prompt to confirm."
+    );
+
+    if (!doubleConfirmed) return;
+
+    const userInput = window.prompt(
+      "Type 'DELETE ALL' (exact case) to confirm deletion of all reservations:"
+    );
+
+    if (userInput !== "DELETE ALL") {
+      toast.error("Deletion cancelled. Input did not match 'DELETE ALL'.");
+      return;
+    }
+
+    setDeleteAllLoading(true);
+    try {
+      // Delete all reservations from Supabase
+      const { error } = await supabase
+        .from("reservations")
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all rows (using impossible ID condition)
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      // Clear local state
+      setReservations([]);
+
+      toast.success(
+        "🗑️ All reservations have been permanently deleted!",
+        {
+          duration: 8000,
+          style: {
+            background: '#10b981',
+            color: 'white',
+            border: 'none',
+            borderRadius: '8px',
+            fontSize: '14px',
+            fontWeight: '500'
+          }
+        }
+      );
+
+      console.log("All reservations deleted successfully");
+    } catch (error) {
+      console.error("Error deleting all reservations:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to delete all reservations",
+        {
+          duration: 5000,
+          style: {
+            background: '#ef4444',
+            color: 'white',
+            border: 'none',
+            borderRadius: '8px',
+            fontSize: '14px',
+            fontWeight: '500'
+          }
+        }
+      );
+    } finally {
+      setDeleteAllLoading(false);
     }
   };
 
@@ -708,7 +895,7 @@ export default function AdminDashboard() {
 
       if (error) {
         console.error("Error updating reservation:", error);
-        alert(`Error updating reservation: ${error.message}`);
+        toast.error(`Error updating reservation: ${error.message}`);
         return;
       }
 
@@ -737,11 +924,11 @@ export default function AdminDashboard() {
       setEditingReservation(null);
       setEditedReservation({});
 
-      alert("Reservation updated successfully!");
+      toast.success("Reservation updated successfully!");
 
     } catch (error) {
       console.error("Error saving reservation:", error);
-      alert(`Error saving reservation: ${error}`);
+      toast.error(`Error saving reservation: ${error}`);
     }
   };
 
@@ -774,10 +961,17 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteReservation = async (reservationId: string) => {
-    if (!confirm("Are you sure you want to delete this reservation?")) {
-      return;
-    }
+    // Show confirmation toast
+    toast(`Delete this reservation?`, {
+      description: 'This action cannot be undone.',
+      action: {
+        label: 'Delete',
+        onClick: () => executeDeleteReservation(reservationId)
+      }
+    });
+  };
 
+  const executeDeleteReservation = async (reservationId: string) => {
     try {
       console.log("Attempting to delete reservation:", reservationId); // Debug log
       
@@ -792,12 +986,12 @@ export default function AdminDashboard() {
 
       if (checkError) {
         console.error("Error checking reservation:", checkError);
-        alert(`Error finding reservation: ${checkError.message}`);
+        toast.error(`Error finding reservation: ${checkError.message}`);
         return;
       }
 
       if (!existingReservation) {
-        alert("Reservation not found in database.");
+        toast.error("Reservation not found in database.");
         return;
       }
 
@@ -822,7 +1016,7 @@ export default function AdminDashboard() {
         const updatedReservations = reservations.filter(r => r.id !== reservationId);
         setReservations(updatedReservations);
         
-        alert("Reservation deleted successfully!");
+        toast.success("Reservation deleted successfully!");
 
         // Regenerate chart data with the updated reservations list
         if (getNumericValue(metrics.avgOrderValue) > 0) {
@@ -864,7 +1058,7 @@ export default function AdminDashboard() {
             .eq('id', reservationId);
 
           if (sqlError) {
-            alert(`Cannot delete reservation due to database permissions. Please check your Supabase RLS policies or contact your administrator.\n\nError: ${sqlError.message}`);
+            toast.error(`Cannot delete reservation due to database permissions. Please check your Supabase RLS policies or contact your administrator.\n\nError: ${sqlError.message}`);
             return;
           }
         }
@@ -874,7 +1068,7 @@ export default function AdminDashboard() {
         count = 1; // Simulate successful "deletion"
       } else if (error) {
         console.error("Error deleting reservation:", error);
-        alert(`Error deleting reservation: ${error.message}`);
+        toast.error(`Error deleting reservation: ${error.message}`);
         return;
       }
 
@@ -891,9 +1085,9 @@ export default function AdminDashboard() {
           .single();
         
         if (stillExists) {
-          alert(`Reservation still exists in database. This is likely due to Row Level Security (RLS) policies.\n\nTo fix this, you need to:\n1. Go to your Supabase dashboard\n2. Navigate to Authentication > Policies\n3. Create or update RLS policies for the 'reservations' table to allow admin users to delete reservations\n\nAlternatively, you can disable RLS for the reservations table (less secure but will work immediately).`);
+          toast.error(`Reservation still exists in database. This is likely due to Row Level Security (RLS) policies.\n\nTo fix this, you need to:\n1. Go to your Supabase dashboard\n2. Navigate to Authentication > Policies\n3. Create or update RLS policies for the 'reservations' table to allow admin users to delete reservations\n\nAlternatively, you can disable RLS for the reservations table (less secure but will work immediately).`);
         } else {
-          alert("Reservation appears to have been deleted by another process. Refreshing the list...");
+          toast.success("Reservation appears to have been deleted by another process. Refreshing the list...");
           await fetchReservations();
         }
         return;
@@ -908,7 +1102,7 @@ export default function AdminDashboard() {
       const updatedReservations = reservations.filter(r => r.id !== reservationId);
       setReservations(updatedReservations);
       
-      alert("Reservation deleted successfully!");
+      toast.success("Reservation deleted successfully!");
 
       // Regenerate chart data with the updated reservations list
       if (getNumericValue(metrics.avgOrderValue) > 0) {
@@ -917,7 +1111,7 @@ export default function AdminDashboard() {
 
     } catch (error) {
       console.error("Error deleting reservation:", error);
-      alert(`Error deleting reservation: ${error}`);
+      toast.error(`Error deleting reservation: ${error}`);
     }
   };
 
@@ -938,7 +1132,7 @@ export default function AdminDashboard() {
 
       if (error) {
         console.error("Error approving reservation:", error);
-        alert(`Error approving reservation: ${error.message}`);
+        toast.error(`Error approving reservation: ${error.message}`);
         return;
       }
 
@@ -951,19 +1145,26 @@ export default function AdminDashboard() {
         )
       );
 
-      alert("Reservation approved successfully!");
+      toast.success("Reservation approved successfully!");
     } catch (error) {
       console.error("Error approving reservation:", error);
-      alert(`Error approving reservation: ${error}`);
+      toast.error(`Error approving reservation: ${error}`);
     }
   };
 
   // Handle rejecting pending reservations
   const handleRejectReservation = async (reservationId: string) => {
-    if (!confirm("Are you sure you want to reject this reservation? This action cannot be undone.")) {
-      return;
-    }
+    // Show confirmation toast
+    toast(`Reject this reservation?`, {
+      description: 'This action cannot be undone.',
+      action: {
+        label: 'Reject',
+        onClick: () => executeRejectReservation(reservationId)
+      }
+    });
+  };
 
+  const executeRejectReservation = async (reservationId: string) => {
     try {
       const { error } = await supabase
         .from('reservations')
@@ -972,7 +1173,7 @@ export default function AdminDashboard() {
 
       if (error) {
         console.error("Error rejecting reservation:", error);
-        alert(`Error rejecting reservation: ${error.message}`);
+        toast.error(`Error rejecting reservation: ${error.message}`);
         return;
       }
 
@@ -985,10 +1186,10 @@ export default function AdminDashboard() {
         )
       );
 
-      alert("Reservation rejected successfully!");
+      toast.success("Reservation rejected successfully!");
     } catch (error) {
       console.error("Error rejecting reservation:", error);
-      alert(`Error rejecting reservation: ${error}`);
+      toast.error(`Error rejecting reservation: ${error}`);
     }
   };
 
@@ -1005,7 +1206,7 @@ export default function AdminDashboard() {
     try {
       // Validate required fields
       if (!newReservation.name || !newReservation.email || !newReservation.phone || !newReservation.datetime) {
-        alert("Please fill in all required fields.");
+        toast.error("Please fill in all required fields.");
         setSavingNewReservation(false);
         return;
       }
@@ -1013,14 +1214,14 @@ export default function AdminDashboard() {
       // Validate email format
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(newReservation.email)) {
-        alert("Please enter a valid email address.");
+        toast.error("Please enter a valid email address.");
         setSavingNewReservation(false);
         return;
       }
 
       // Validate party size
       if (newReservation.party_size < 1 || newReservation.party_size > 20) {
-        alert("Party size must be between 1 and 20.");
+        toast.error("Party size must be between 1 and 20.");
         setSavingNewReservation(false);
         return;
       }
@@ -1029,7 +1230,7 @@ export default function AdminDashboard() {
       const reservationDate = new Date(newReservation.datetime);
       const now = new Date();
       if (reservationDate <= now) {
-        alert("Reservation date must be in the future.");
+        toast.error("Reservation date must be in the future.");
         setSavingNewReservation(false);
         return;
       }
@@ -1042,7 +1243,7 @@ export default function AdminDashboard() {
         .limit(1);
 
       if (tableError || !tables || tables.length === 0) {
-        alert("No available table found for this party size. Please check your table configuration.");
+        toast.error("No available table found for this party size. Please check your table configuration.");
         setSavingNewReservation(false);
         return;
       }
@@ -1066,12 +1267,20 @@ export default function AdminDashboard() {
 
       if (error) {
         console.error("Error creating reservation:", error);
-        alert(`Error creating reservation: ${error.message}`);
+        toast.error(`Error creating reservation: ${error.message}`);
         return;
       }
 
-      // Add to local state
-      const updatedReservations = [...reservations, data[0]].sort((a, b) => 
+      // Add to local state with proper display fields
+      const processedReservation = {
+        ...data[0],
+        displayName: data[0].user_id ? data[0].name : data[0].guest_name,
+        displayEmail: data[0].user_id ? data[0].email : data[0].guest_email,
+        displayPhone: data[0].user_id ? data[0].phone : data[0].guest_phone,
+        isGuest: !data[0].user_id
+      };
+      
+      const updatedReservations = [...reservations, processedReservation].sort((a, b) => 
         new Date(a.datetime).getTime() - new Date(b.datetime).getTime()
       );
       setReservations(updatedReservations);
@@ -1086,7 +1295,7 @@ export default function AdminDashboard() {
       });
       setShowAddForm(false);
 
-      alert("Reservation created successfully!");
+      toast.success("Reservation created successfully!");
 
       // Regenerate chart data since reservation data changed
       if (getNumericValue(metrics.avgOrderValue) > 0) {
@@ -1095,7 +1304,7 @@ export default function AdminDashboard() {
 
     } catch (error) {
       console.error("Error creating reservation:", error);
-      alert(`Error creating reservation: ${error}`);
+      toast.error(`Error creating reservation: ${error}`);
     } finally {
       setSavingNewReservation(false);
     }
@@ -1112,6 +1321,175 @@ export default function AdminDashboard() {
     setShowAddForm(false);
   };
 
+  // Staff Management Functions
+  const fetchStaffMembers = async () => {
+    setLoadingStaff(true);
+    try {
+      const { data, error } = await supabase
+        .from('staff_members')
+        .select('*')
+        .order('last_name', { ascending: true });
+
+      if (error) throw error;
+      setStaffMembers(data || []);
+    } catch (error) {
+      console.error('Error fetching staff:', error);
+      toast.error('Failed to load staff members');
+    } finally {
+      setLoadingStaff(false);
+    }
+  };
+
+  const handleAddStaff = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const formData = new FormData(e.target as HTMLFormElement);
+    
+    try {
+      const staffData = {
+        employee_id: formData.get('employee_id') as string,
+        first_name: formData.get('first_name') as string,
+        last_name: formData.get('last_name') as string,
+        email: formData.get('email') as string,
+        phone: formData.get('phone') as string,
+        address: formData.get('address') as string,
+        emergency_contact_name: formData.get('emergency_contact_name') as string,
+        emergency_contact_phone: formData.get('emergency_contact_phone') as string,
+        role: formData.get('role') as string,
+        department: formData.get('department') as string,
+        hire_date: formData.get('hire_date') as string,
+        hourly_rate: parseFloat(formData.get('hourly_rate') as string),
+        overtime_rate: parseFloat(formData.get('hourly_rate') as string) * 1.5,
+        employment_status: 'active',
+        pay_type: 'hourly',
+        created_by: profile?.id
+      };
+
+      const { data, error } = await supabase
+        .from('staff_members')
+        .insert([staffData])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setStaffMembers([...staffMembers, data]);
+      setShowAddStaffForm(false);
+      toast.success(`Successfully added ${staffData.first_name} ${staffData.last_name}`);
+      
+      // Reset form
+      (e.target as HTMLFormElement).reset();
+    } catch (error) {
+      console.error('Error adding staff:', error);
+      toast.error('Failed to add staff member');
+    }
+  };
+
+  const handleToggleStaffStatus = async (staffId: string, currentStatus: string) => {
+    try {
+      const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
+      
+      const { error } = await supabase
+        .from('staff_members')
+        .update({ employment_status: newStatus })
+        .eq('id', staffId);
+
+      if (error) throw error;
+
+      setStaffMembers(staffMembers.map(staff => 
+        staff.id === staffId 
+          ? { ...staff, employment_status: newStatus }
+          : staff
+      ));
+
+      toast.success(`Staff member ${newStatus === 'active' ? 'activated' : 'deactivated'} successfully`);
+    } catch (error) {
+      console.error('Error updating staff status:', error);
+      toast.error('Failed to update staff status');
+    }
+  };
+
+  const handleEditStaff = (staff: any) => {
+    setEditingStaff(staff.id);
+    setEditingStaffData(staff);
+    
+    // Smooth scroll to edit form after a brief delay to ensure DOM updates
+    setTimeout(() => {
+      const editForm = document.getElementById('staff-edit-form');
+      if (editForm) {
+        editForm.scrollIntoView({ 
+          behavior: 'smooth', 
+          block: 'start',
+          inline: 'nearest'
+        });
+      }
+    }, 100);
+  };
+
+  const handleUpdateStaff = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    try {
+      const updatedData = {
+        employee_id: editingStaffData.employee_id,
+        first_name: editingStaffData.first_name,
+        last_name: editingStaffData.last_name,
+        email: editingStaffData.email,
+        phone: editingStaffData.phone,
+        address: editingStaffData.address,
+        emergency_contact_name: editingStaffData.emergency_contact_name,
+        emergency_contact_phone: editingStaffData.emergency_contact_phone,
+        role: editingStaffData.role,
+        department: editingStaffData.department,
+        hourly_rate: parseFloat(editingStaffData.hourly_rate),
+        overtime_rate: parseFloat(editingStaffData.hourly_rate) * 1.5,
+      };
+
+      const { error } = await supabase
+        .from('staff_members')
+        .update(updatedData)
+        .eq('id', editingStaff);
+
+      if (error) throw error;
+
+      setStaffMembers(staffMembers.map(staff => 
+        staff.id === editingStaff 
+          ? { ...staff, ...updatedData }
+          : staff
+      ));
+
+      setEditingStaff(null);
+      setEditingStaffData(null);
+      toast.success(`Successfully updated ${updatedData.first_name} ${updatedData.last_name}`);
+    } catch (error) {
+      console.error('Error updating staff:', error);
+      toast.error('Failed to update staff member');
+    }
+  };
+
+  const handleCancelStaffEdit = () => {
+    setEditingStaff(null);
+    setEditingStaffData(null);
+  };
+
+  const handleStaffDataChange = (field: string, value: string) => {
+    setEditingStaffData((prev: any) => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  // Filter staff based on search
+  const filteredStaff = staffMembers.filter(staff => {
+    const searchTerm = staffSearch.toLowerCase();
+    return (
+      staff.first_name.toLowerCase().includes(searchTerm) ||
+      staff.last_name.toLowerCase().includes(searchTerm) ||
+      staff.employee_id.toLowerCase().includes(searchTerm) ||
+      staff.email?.toLowerCase().includes(searchTerm) ||
+      staff.role.toLowerCase().includes(searchTerm)
+    );
+  });
+
   useEffect(() => {
     if (!loading && profile?.role === "admin") {
       console.log("Admin authenticated, fetching initial data");
@@ -1121,10 +1499,14 @@ export default function AdminDashboard() {
       });
       // Force fresh reservation data on mount
       fetchReservations();
+      // Load staff members
+      fetchStaffMembers();
       // Load saved metrics list
       loadSavedMetricsList();
       // Load metrics for today
       loadMetricsForDate(selectedDate);
+      // Calculate auto-metrics for today
+      calculateAutoMetrics(selectedDate);
     }
     if (!loading && (!profile || profile.role !== "admin")) {
       router.replace("/");
@@ -1258,6 +1640,59 @@ export default function AdminDashboard() {
     return () => clearTimeout(timeoutId);
   }, [metrics.foodCostPercent, metrics.laborCostPercent, reservations, activeSection]);
 
+  // Calculate auto-metrics from reservation data for selected date
+  const calculateAutoMetrics = (selectedDate: string) => {
+    console.log("🔄 Calculating auto-metrics for date:", selectedDate);
+    console.log("📋 Total reservations available:", reservations.length);
+    
+    if (!selectedDate || reservations.length === 0) {
+      console.log("❌ No date selected or no reservations available");
+      setAutoMetrics({
+        dailyCovers: 0,
+        reservationRate: 0,
+        estimatedRevenue: 0,
+        avgPartySize: 0,
+        confirmedReservations: 0,
+        totalReservations: 0,
+      });
+      return;
+    }
+
+    // Filter reservations for the selected date
+    const dateReservations = reservations.filter(reservation => {
+      const reservationDate = new Date(reservation.datetime).toISOString().split('T')[0];
+      return reservationDate === selectedDate;
+    });
+
+    console.log(`📅 Reservations for ${selectedDate}:`, dateReservations.length);
+    console.log("📝 Date reservations:", dateReservations);
+
+    const totalReservations = dateReservations.length;
+    const confirmedReservations = dateReservations.filter(r => r.status === 'confirmed').length;
+    const dailyCovers = confirmedReservations > 0 
+      ? dateReservations.filter(r => r.status === 'confirmed').reduce((sum, r) => sum + r.party_size, 0)
+      : 0;
+    const reservationRate = totalReservations > 0 ? (confirmedReservations / totalReservations) * 100 : 0;
+    const avgPartySize = confirmedReservations > 0 
+      ? dailyCovers / confirmedReservations 
+      : 0;
+    
+    // Estimate revenue (assuming $35 average per person)
+    const estimatedRevenue = dailyCovers * 35;
+
+    const autoMetricsResult = {
+      dailyCovers,
+      reservationRate: Number(reservationRate.toFixed(1)),
+      estimatedRevenue,
+      avgPartySize: Number(avgPartySize.toFixed(1)),
+      confirmedReservations,
+      totalReservations,
+    };
+
+    console.log("✅ Auto-metrics calculated:", autoMetricsResult);
+    setAutoMetrics(autoMetricsResult);
+  };
+
   // Data Entry handler
   const handleMetricChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -1281,7 +1716,9 @@ export default function AdminDashboard() {
 
   // Delete saved metrics for a specific date
   const deleteSavedMetrics = async (dateToDelete: string) => {
-    if (!confirm(`Are you sure you want to delete the metrics for ${new Date(dateToDelete + 'T00:00:00').toLocaleDateString()}?`)) {
+    const dateDisplay = new Date(dateToDelete + 'T00:00:00').toLocaleDateString();
+    
+    if (!confirm(`Are you sure you want to delete the metrics for ${dateDisplay}?`)) {
       return;
     }
 
@@ -1289,12 +1726,11 @@ export default function AdminDashboard() {
       const { error } = await supabase
         .from("daily_metrics")
         .delete()
-        .eq('user_id', profile?.id)
         .eq('date', dateToDelete);
       
       if (error) {
         console.error("Error deleting metrics:", error);
-        alert(`Error deleting metrics: ${error.message}`);
+        toast.error(`Error deleting metrics: ${error.message}`);
         return;
       }
 
@@ -1313,12 +1749,12 @@ export default function AdminDashboard() {
       }
 
       // Refresh saved metrics list
-      loadSavedMetricsList();
+      await loadSavedMetricsList();
       
-      alert(`Metrics for ${new Date(dateToDelete + 'T00:00:00').toLocaleDateString()} deleted successfully!`);
+      toast.success(`Metrics for ${dateDisplay} deleted successfully!`);
     } catch (error) {
       console.error("Error deleting metrics:", error);
-      alert(`Error deleting metrics: ${error}`);
+      toast.error(`Error deleting metrics: ${error}`);
     }
   };
 
@@ -1334,7 +1770,9 @@ export default function AdminDashboard() {
       
       if (error && error.code !== 'PGRST116') { // PGRST116 is "not found"
         console.error("Error loading metrics:", error);
-        alert(`Error loading metrics: ${error.message}`);
+        toast.error("Failed to load metrics", {
+          description: `Database error: ${error.message}`
+        });
         return;
       }
       
@@ -1364,7 +1802,9 @@ export default function AdminDashboard() {
       }
     } catch (error) {
       console.error("Error loading metrics:", error);
-      alert(`Error loading metrics: ${error}`);
+      toast.error("Failed to load metrics", {
+        description: `Unexpected error: ${error}`
+      });
     } finally {
       setLoadingMetrics(false);
     }
@@ -1373,7 +1813,7 @@ export default function AdminDashboard() {
   // Save metrics for the selected date
   const saveMetricsForDate = async () => {
     if (!selectedDate) {
-      alert("Please select a date first.");
+      toast.error("Please select a date first.");
       return;
     }
 
@@ -1404,17 +1844,47 @@ export default function AdminDashboard() {
         
         // If table doesn't exist, provide SQL to create it
         if (error.message.includes("relation") && error.message.includes("does not exist")) {
-          alert(`Database table 'daily_metrics' doesn't exist. Please run this SQL in your Supabase dashboard:\n\nCREATE TABLE IF NOT EXISTS public.daily_metrics (\n  id BIGSERIAL PRIMARY KEY,\n  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,\n  date DATE NOT NULL,\n  daily_revenue DECIMAL(10,2) DEFAULT 0,\n  avg_order_value DECIMAL(10,2) DEFAULT 0,\n  food_cost_percent DECIMAL(5,2) DEFAULT 0,\n  labor_cost_percent DECIMAL(5,2) DEFAULT 0,\n  daily_covers INTEGER DEFAULT 0,\n  table_turnover DECIMAL(5,2) DEFAULT 0,\n  reservation_rate DECIMAL(5,2) DEFAULT 0,\n  waste_percent DECIMAL(5,2) DEFAULT 0,\n  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),\n  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),\n  UNIQUE(user_id, date)\n);\n\nALTER TABLE public.daily_metrics ENABLE ROW LEVEL SECURITY;\n\nCREATE POLICY "Users can manage their own metrics" ON public.daily_metrics\n  FOR ALL USING (auth.uid() = user_id);`);
+          toast.error("Database table 'daily_metrics' does not exist", {
+            description: "Please check your database setup. The required table is missing.",
+            action: {
+              label: "Copy SQL",
+              onClick: () => {
+                navigator.clipboard.writeText(`CREATE TABLE IF NOT EXISTS public.daily_metrics (
+  id BIGSERIAL PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  date DATE NOT NULL,
+  daily_revenue DECIMAL(10,2) DEFAULT 0,
+  avg_order_value DECIMAL(10,2) DEFAULT 0,
+  food_cost_percent DECIMAL(5,2) DEFAULT 0,
+  labor_cost_percent DECIMAL(5,2) DEFAULT 0,
+  daily_covers INTEGER DEFAULT 0,
+  table_turnover DECIMAL(5,2) DEFAULT 0,
+  reservation_rate DECIMAL(5,2) DEFAULT 0,
+  waste_percent DECIMAL(5,2) DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(user_id, date)
+);
+
+ALTER TABLE public.daily_metrics ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
+  FOR ALL USING (auth.uid() = user_id);`);
+                toast.success("SQL schema copied to clipboard");
+              }
+            }
+          });
         } else {
-          alert(`Error saving metrics: ${error.message}`);
+          toast.error(`Error saving metrics: ${error.message}`);
         }
         return;
       }
 
-      alert(`Metrics saved successfully for ${new Date(selectedDate + 'T00:00:00').toLocaleDateString()}!`);
+      const dateDisplay = new Date(selectedDate + 'T00:00:00').toLocaleDateString();
+      toast.success(`Metrics saved successfully for ${dateDisplay}!`);
       
       // Refresh saved metrics list
-      loadSavedMetricsList();
+      await loadSavedMetricsList();
       
       // Generate chart data if reservations exist
       if (reservations.length > 0) {
@@ -1422,7 +1892,7 @@ export default function AdminDashboard() {
       }
     } catch (error) {
       console.error("Error saving metrics:", error);
-      alert(`Error saving metrics: ${error}`);
+      toast.error(`Error saving metrics: ${error}`);
     } finally {
       setSavingMetrics(false);
     }
@@ -1451,6 +1921,7 @@ export default function AdminDashboard() {
   const handleDateChange = (newDate: string) => {
     setSelectedDate(newDate);
     loadMetricsForDate(newDate);
+    calculateAutoMetrics(newDate);
   };
 
   const handleLogout = async () => {
@@ -1463,33 +1934,160 @@ export default function AdminDashboard() {
   return (
     <div className="min-h-screen bg-[#18181b] font-sans text-white overflow-y-auto">
       <div className="flex h-full min-h-screen">
-        {/* Sidebar */}
-        <aside className="w-72 bg-[#111113] flex flex-col py-8 px-6 min-h-screen fixed left-0 top-0 z-40">
+        {/* Enhanced Sidebar */}
+        <aside className="w-72 bg-gradient-to-b from-[#111113] to-[#0f0f11] flex flex-col py-8 px-6 min-h-screen fixed left-0 top-0 z-40 border-r border-gray-800/50">
           <div className="flex items-center mb-8">
-            <div className="bg-[#23232a] rounded-full p-3">
-              {/* Restaurant logo icon */}
+            <div className="bg-gradient-to-br from-purple-600 to-indigo-600 rounded-xl p-3 shadow-lg">
               <BuildingStorefrontIcon className="h-8 w-8 text-white" />
             </div>
+            <div className="ml-3">
+              <h1 className="text-white font-bold text-lg">HostMate</h1>
+              <p className="text-gray-400 text-xs">Restaurant Admin</p>
+            </div>
           </div>
-          <div className="uppercase text-xs text-gray-400 mb-4 tracking-widest">General</div>
+          <div className="uppercase text-xs text-gray-500 mb-6 tracking-widest font-medium flex items-center gap-2">
+            <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+            Navigation
+          </div>
           <nav className="flex flex-col gap-2">
-            <button className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${activeSection === "dashboard" ? "bg-purple-900 text-purple-400" : "hover:bg-[#23232a] text-gray-200"}`} onClick={() => setActiveSection("dashboard")}> <HomeIcon className="h-5 w-5" /> Dashboard</button>
-            <button className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${activeSection === "reservations" ? "bg-blue-900 text-blue-400" : "hover:bg-[#23232a] text-gray-200"}`} onClick={() => setActiveSection("reservations")}> <UserGroupIcon className="h-5 w-5" /> Reservations</button>
-            <button className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${activeSection === "dataentry" ? "bg-green-900 text-green-400" : "hover:bg-[#23232a] text-gray-200"}`} onClick={() => setActiveSection("dataentry")}> <CircleStackIcon className="h-5 w-5" /> Data Entry</button>
-            <button className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${activeSection === "database" ? "bg-orange-900 text-orange-400" : "hover:bg-[#23232a] text-gray-200"}`} onClick={() => setActiveSection("database")}> <ServerStackIcon className="h-5 w-5" /> Database</button>
-            <button className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer ${activeSection === "settings" ? "bg-gray-900 text-gray-400" : "hover:bg-[#23232a] text-gray-200"}`} onClick={() => setActiveSection("settings")}> <Cog6ToothIcon className="h-5 w-5" /> Settings</button>
+            <button 
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold cursor-pointer transition-all duration-200 group ${
+                activeSection === "dashboard" 
+                  ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg scale-105" 
+                  : "hover:bg-gray-800/50 text-gray-200 hover:text-white hover:scale-102"
+              }`} 
+              onClick={() => setActiveSection("dashboard")}
+            > 
+              <div className={`p-1 rounded-lg ${
+                activeSection === "dashboard" 
+                  ? "bg-white/20" 
+                  : "bg-purple-600/20 group-hover:bg-purple-600/30"
+              }`}>
+                <HomeIcon className="h-5 w-5" />
+              </div>
+              <span>Dashboard</span>
+              {activeSection === "dashboard" && <div className="w-2 h-2 bg-white rounded-full ml-auto"></div>}
+            </button>
+            <button 
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold cursor-pointer transition-all duration-200 group ${
+                activeSection === "reservations" 
+                  ? "bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg scale-105" 
+                  : "hover:bg-gray-800/50 text-gray-200 hover:text-white hover:scale-102"
+              }`} 
+              onClick={() => setActiveSection("reservations")}
+            > 
+              <div className={`p-1 rounded-lg ${
+                activeSection === "reservations" 
+                  ? "bg-white/20" 
+                  : "bg-blue-600/20 group-hover:bg-blue-600/30"
+              }`}>
+                <UserGroupIcon className="h-5 w-5" />
+              </div>
+              <span>Reservations</span>
+              {activeSection === "reservations" && <div className="w-2 h-2 bg-white rounded-full ml-auto"></div>}
+            </button>
+            <button 
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold cursor-pointer transition-all duration-200 group ${
+                activeSection === "dataentry" 
+                  ? "bg-gradient-to-r from-green-600 to-emerald-600 text-white shadow-lg scale-105" 
+                  : "hover:bg-gray-800/50 text-gray-200 hover:text-white hover:scale-102"
+              }`} 
+              onClick={() => setActiveSection("dataentry")}
+            > 
+              <div className={`p-1 rounded-lg ${
+                activeSection === "dataentry" 
+                  ? "bg-white/20" 
+                  : "bg-green-600/20 group-hover:bg-green-600/30"
+              }`}>
+                <CircleStackIcon className="h-5 w-5" />
+              </div>
+              <span>Data Entry</span>
+              {activeSection === "dataentry" && <div className="w-2 h-2 bg-white rounded-full ml-auto"></div>}
+            </button>
+            <button 
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold cursor-pointer transition-all duration-200 group ${
+                activeSection === "inventory" 
+                  ? "bg-gradient-to-r from-yellow-600 to-orange-600 text-white shadow-lg scale-105" 
+                  : "hover:bg-gray-800/50 text-gray-200 hover:text-white hover:scale-102"
+              }`} 
+              onClick={() => setActiveSection("inventory")}
+            > 
+              <div className={`p-1 rounded-lg ${
+                activeSection === "inventory" 
+                  ? "bg-white/20" 
+                  : "bg-yellow-600/20 group-hover:bg-yellow-600/30"
+              }`}>
+                <CubeIcon className="h-5 w-5" />
+              </div>
+              <span>Inventory</span>
+              {activeSection === "inventory" && <div className="w-2 h-2 bg-white rounded-full ml-auto"></div>}
+            </button>
+            <button 
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold cursor-pointer transition-all duration-200 group ${
+                activeSection === "database" 
+                  ? "bg-gradient-to-r from-orange-600 to-red-600 text-white shadow-lg scale-105" 
+                  : "hover:bg-gray-800/50 text-gray-200 hover:text-white hover:scale-102"
+              }`} 
+              onClick={() => setActiveSection("database")}
+            > 
+              <div className={`p-1 rounded-lg ${
+                activeSection === "database" 
+                  ? "bg-white/20" 
+                  : "bg-orange-600/20 group-hover:bg-orange-600/30"
+              }`}>
+                <ServerStackIcon className="h-5 w-5" />
+              </div>
+              <span>Database</span>
+              {activeSection === "database" && <div className="w-2 h-2 bg-white rounded-full ml-auto"></div>}
+            </button>
+            <button 
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold cursor-pointer transition-all duration-200 group ${
+                activeSection === "staff" 
+                  ? "bg-gradient-to-r from-teal-600 to-cyan-600 text-white shadow-lg scale-105" 
+                  : "hover:bg-gray-800/50 text-gray-200 hover:text-white hover:scale-102"
+              }`} 
+              onClick={() => setActiveSection("staff")}
+            > 
+              <div className={`p-1 rounded-lg ${
+                activeSection === "staff" 
+                  ? "bg-white/20" 
+                  : "bg-teal-600/20 group-hover:bg-teal-600/30"
+              }`}>
+                <UserIcon className="h-5 w-5" />
+              </div>
+              <span>Staff</span>
+              {activeSection === "staff" && <div className="w-2 h-2 bg-white rounded-full ml-auto"></div>}
+            </button>
+            <button 
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold cursor-pointer transition-all duration-200 group ${
+                activeSection === "settings" 
+                  ? "bg-gradient-to-r from-gray-600 to-gray-700 text-white shadow-lg scale-105" 
+                  : "hover:bg-gray-800/50 text-gray-200 hover:text-white hover:scale-102"
+              }`} 
+              onClick={() => setActiveSection("settings")}
+            > 
+              <div className={`p-1 rounded-lg ${
+                activeSection === "settings" 
+                  ? "bg-white/20" 
+                  : "bg-gray-600/20 group-hover:bg-gray-600/30"
+              }`}>
+                <Cog6ToothIcon className="h-5 w-5" />
+              </div>
+              <span>Settings</span>
+              {activeSection === "settings" && <div className="w-2 h-2 bg-white rounded-full ml-auto"></div>}
+            </button>
           </nav>
           
-          {/* Admin Profile at Bottom of Sidebar */}
-          <div className="mt-auto pt-6 border-t border-gray-700">
-            <div className="flex items-center gap-3 px-4 py-3">
-              <div className="bg-purple-900 rounded-full p-2 flex items-center justify-center">
-                <span className="text-purple-400 font-bold text-sm">
+          {/* Enhanced Admin Profile at Bottom of Sidebar */}
+          <div className="mt-auto pt-6 border-t border-gray-800/50">
+            <div className="flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-gray-800/50 to-gray-900/50 rounded-xl border border-gray-700/50">
+              <div className="bg-gradient-to-br from-purple-600 to-indigo-600 rounded-full p-2 flex items-center justify-center shadow-lg">
+                <span className="text-white font-bold text-sm">
                   {currentProfile?.name ? currentProfile.name.charAt(0).toUpperCase() : currentProfile?.email?.charAt(0).toUpperCase()}
                 </span>
               </div>
-              <div className="flex flex-col">
-                <span className="text-white text-sm font-semibold">
+              <div className="flex flex-col min-w-0 flex-1">
+                <span className="text-white text-sm font-semibold truncate">
                   {currentProfile?.name || "Admin"}
                 </span>
                 <span className="text-gray-400 text-xs truncate">
@@ -1500,16 +2098,23 @@ export default function AdminDashboard() {
           </div>
         </aside>
         
-        {/* User Status Header - Customer Style */}
-        <header className="fixed top-0 right-0 p-4 flex justify-end items-center z-50">
-          <div className="bg-black/30 backdrop-blur-lg rounded-xl p-2 flex items-center gap-4">
-            <span className="text-sm text-gray-300 pl-2">
-              Welcome, {currentProfile?.name || currentProfile?.email || "Admin"}
-            </span>
+        {/* Enhanced User Status Header */}
+        <header className="fixed top-0 right-0 p-4 flex justify-end items-center z-60" style={{ zIndex: 9999, pointerEvents: 'auto' }}>
+          <div className="bg-black/40 backdrop-blur-xl rounded-2xl p-3 flex items-center gap-4 border border-gray-700/50 shadow-2xl">
+            <div className="flex items-center gap-3">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+              <span className="text-sm text-gray-300 font-medium">
+                Welcome, {currentProfile?.name || currentProfile?.email || "Admin"}
+              </span>
+            </div>
             <button
               onClick={handleLogout}
-              className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm"
+              className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold py-2 px-4 rounded-xl transition-all duration-200 text-sm cursor-pointer shadow-lg hover:shadow-xl flex items-center gap-2"
+              style={{ zIndex: 10000, pointerEvents: 'auto', position: 'relative' }}
             >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
               Sign Out
             </button>
           </div>
@@ -1528,6 +2133,7 @@ export default function AdminDashboard() {
                     case "dashboard": return "Dashboard";
                     case "reservations": return "Reservations";
                     case "dataentry": return "Data Entry";
+                    case "inventory": return "Inventory";
                     case "settings": return "Settings";
                     default: return "Dashboard";
                   }
@@ -1561,7 +2167,109 @@ export default function AdminDashboard() {
           {/* Dashboard Section */}
           {activeSection === "dashboard" && (
             <>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+              {/* Enhanced Auto-Calculated Metrics Section */}
+              <div className="mb-10">
+                <div className="flex items-center justify-center gap-4 mb-6">
+                  <div className="bg-green-600/20 p-3 rounded-xl border border-green-500/30">
+                    <ChartBarIcon className="h-7 w-7 text-green-400" />
+                  </div>
+                  <div className="text-center">
+                    <h2 className="text-2xl font-bold text-white">Live Analytics Dashboard</h2>
+                    <p className="text-gray-400 mt-1">Real-time metrics calculated from your reservation data</p>
+                  </div>
+                  <div className="px-4 py-2 bg-gradient-to-r from-green-500/20 to-emerald-500/20 text-green-400 rounded-full text-sm font-medium border border-green-500/30 flex items-center gap-2">
+                    <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                    Auto-calculated
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-4">
+                  <Card className="bg-gradient-to-br from-green-600 to-green-700 rounded-2xl p-6 border-0 shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-105">
+                    <CardTitle className="font-bold text-lg text-white flex items-center gap-3">
+                      <div className="bg-white/20 p-2 rounded-lg">
+                        <UserGroupIcon className="h-6 w-6" />
+                      </div>
+                      <div>
+                        <div>Daily Covers</div>
+                        <div className="text-xs font-normal text-green-100">Customer Traffic</div>
+                      </div>
+                    </CardTitle>
+                    <div className="text-4xl font-bold text-white mt-4">{autoMetrics.dailyCovers}</div>
+                    <div className="text-sm text-green-100 mt-2 flex items-center gap-2">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      From {autoMetrics.confirmedReservations} confirmed reservations
+                    </div>
+                  </Card>
+                  
+                  <Card className="bg-gradient-to-br from-blue-600 to-blue-700 rounded-2xl p-6 border-0 shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-105">
+                    <CardTitle className="font-bold text-lg text-white flex items-center gap-3">
+                      <div className="bg-white/20 p-2 rounded-lg">
+                        <CheckCircleIcon className="h-6 w-6" />
+                      </div>
+                      <div>
+                        <div>Confirmation Rate</div>
+                        <div className="text-xs font-normal text-blue-100">Booking Success</div>
+                      </div>
+                    </CardTitle>
+                    <div className="text-4xl font-bold text-white mt-4">{autoMetrics.reservationRate}%</div>
+                    <div className="text-sm text-blue-100 mt-2 flex items-center gap-2">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                      </svg>
+                      {autoMetrics.confirmedReservations} of {autoMetrics.totalReservations} reservations
+                    </div>
+                  </Card>
+                  
+                  <Card className="bg-gradient-to-br from-purple-600 to-purple-700 rounded-2xl p-6 border-0 shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-105">
+                    <CardTitle className="font-bold text-lg text-white flex items-center gap-3">
+                      <div className="bg-white/20 p-2 rounded-lg">
+                        <CubeIcon className="h-6 w-6" />
+                      </div>
+                      <div>
+                        <div>Est. Revenue</div>
+                        <div className="text-xs font-normal text-purple-100">Daily Projection</div>
+                      </div>
+                    </CardTitle>
+                    <div className="text-4xl font-bold text-white mt-4">${autoMetrics.estimatedRevenue.toLocaleString()}</div>
+                    <div className="text-sm text-purple-100 mt-2 flex items-center gap-2">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                      </svg>
+                      @ $35 avg per person
+                    </div>
+                  </Card>
+                </div>
+                
+                <div className="text-xs text-gray-400 mb-6 bg-gray-800/50 rounded-lg p-3">
+                  <span className="font-medium">Note:</span> Live metrics auto-calculate from reservation data for {new Date(selectedDate + 'T00:00:00').toLocaleDateString()}.
+                  {autoMetrics.totalReservations === 0 ? (
+                    <div className="mt-2 text-amber-400 flex items-center gap-2">
+                      <ExclamationTriangleIcon className="h-4 w-4" />
+                      <strong>No reservations found for this date.</strong> Try selecting a different date with existing reservations.
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-green-400 flex items-center gap-2">
+                      <CheckCircleIcon className="h-4 w-4" />
+                      Found {autoMetrics.totalReservations} reservation{autoMetrics.totalReservations !== 1 ? 's' : ''} for this date.
+                    </div>
+                  )}
+                  <div className="mt-1">Use manual data entry below for precise financial tracking.</div>
+                </div>
+              </div>
+
+              {/* Manual Metrics Section */}
+              <div className="mb-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <LightBulbIcon className="h-6 w-6 text-blue-400" />
+                  <h2 className="text-xl font-semibold text-white">Financial Metrics</h2>
+                  <div className="px-3 py-1 bg-blue-500/20 text-blue-400 rounded-full text-sm font-medium">
+                    Manual entry
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
                 {/* Top Row Cards */}
                 <Card className="bg-[#23232a] rounded-xl p-6">
                   <CardTitle className="font-bold text-lg text-white">Daily Revenue</CardTitle>
@@ -1744,61 +2452,111 @@ export default function AdminDashboard() {
                   </div>
                 </Card>
               </div>
+              </div>
             </>
           )}
-          {/* Data Entry Section */}
+          {/* Enhanced Data Entry Section */}
           {activeSection === "dataentry" && (
-            <div className="space-y-6">
-              {/* Date Selection and Saved Metrics */}
+            <div className="space-y-8">
+              {/* Enhanced Header */}
+              <div className="text-center mb-8">
+                <div className="flex items-center justify-center gap-3 mb-4">
+                  <div className="bg-green-600/20 p-3 rounded-lg border border-green-500/30">
+                    <CircleStackIcon className="h-8 w-8 text-green-400" />
+                  </div>
+                  <div>
+                    <h1 className="text-3xl font-bold text-white">Restaurant Analytics</h1>
+                    <p className="text-gray-400 mt-1">Track daily metrics and business performance</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Enhanced Date Selection and Saved Metrics */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Date Selection */}
-                <Card className="bg-[#23232a] rounded-xl p-6">
-                  <CardTitle className="font-bold text-lg mb-4 text-white">Select Date</CardTitle>
+                {/* Enhanced Date Selection */}
+                <Card className="bg-gradient-to-br from-[#23232a] to-[#1f1f26] rounded-xl p-6 border border-gray-700/50 shadow-lg">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-blue-600/20 p-2 rounded-lg border border-blue-500/30">
+                      <svg className="h-5 w-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3a4 4 0 118 0v4m-4 10V8a7 7 0 00-7 7v5a2 2 0 002 2h10a2 2 0 002-2v-5a7 7 0 00-7-7zM15 11V8a3 3 0 00-6 0v3h6z" />
+                      </svg>
+                    </div>
+                    <CardTitle className="font-bold text-lg text-white">Select Date</CardTitle>
+                  </div>
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm font-medium mb-2 text-gray-300">Date</label>
+                      <label className="block text-sm font-medium mb-2 text-gray-300 flex items-center gap-2">
+                        <svg className="h-4 w-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3a4 4 0 118 0v4m-4 10V8a7 7 0 00-7 7v5a2 2 0 002 2h10a2 2 0 002-2v-5a7 7 0 00-7-7zM15 11V8a3 3 0 00-6 0v3h6z" />
+                        </svg>
+                        Analytics Date
+                      </label>
                       <input
                         type="date"
                         value={selectedDate}
                         onChange={(e) => handleDateChange(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg bg-[#18181b] text-white border-2 border-gray-600 font-sans focus:border-blue-500 focus:outline-none transition-colors"
+                        className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white border border-gray-600 font-sans focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all duration-200"
                       />
                     </div>
-                    <div className="text-sm text-gray-400">
-                      Select a date to enter or view metrics. Data is automatically loaded when you change the date.
+                    
+                    <div className="text-sm text-gray-400 p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+                      <div className="flex items-center gap-2 mb-1">
+                        <svg className="h-4 w-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span className="font-medium text-blue-300">Pro Tip</span>
+                      </div>
+                      Select a date to enter or view metrics. Data loads automatically when you change dates.
                     </div>
                   </div>
                 </Card>
 
-                {/* Current Date Status */}
-                <Card className="bg-[#23232a] rounded-xl p-6">
-                  <CardTitle className="font-bold text-lg mb-4 text-white">Current Status</CardTitle>
-                  <div className="space-y-3">
-                    <div className="text-sm text-gray-300">
-                      <span className="font-semibold">Date:</span> {new Date(selectedDate + 'T00:00:00').toLocaleDateString()}
+                {/* Enhanced Current Date Status */}
+                <Card className="bg-gradient-to-br from-[#23232a] to-[#1f1f26] rounded-xl p-6 border border-gray-700/50 shadow-lg">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-green-600/20 p-2 rounded-lg border border-green-500/30">
+                      <svg className="h-5 w-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                      </svg>
                     </div>
-                    <div className="text-sm text-gray-300">
-                      <span className="font-semibold">Revenue:</span> ${getNumericValue(metrics.dailyRevenue).toLocaleString()}
+                    <CardTitle className="font-bold text-lg text-white">Current Status</CardTitle>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center p-3 bg-[#18181b] rounded-lg border border-gray-700/50">
+                      <span className="text-sm font-medium text-gray-300">Date:</span>
+                      <span className="text-sm font-bold text-white">{new Date(selectedDate + 'T00:00:00').toLocaleDateString()}</span>
                     </div>
-                    <div className="text-sm text-gray-300">
-                      <span className="font-semibold">Covers:</span> {getNumericValue(metrics.dailyCovers)}
+                    <div className="flex justify-between items-center p-3 bg-[#18181b] rounded-lg border border-gray-700/50">
+                      <span className="text-sm font-medium text-gray-300">Revenue:</span>
+                      <span className="text-sm font-bold text-green-400">${getNumericValue(metrics.dailyRevenue).toLocaleString()}</span>
                     </div>
-                    <div className="text-sm text-gray-300">
-                      <span className="font-semibold">Status:</span> 
-                      <span className={`ml-2 px-2 py-1 rounded text-xs ${
+                    <div className="flex justify-between items-center p-3 bg-[#18181b] rounded-lg border border-gray-700/50">
+                      <span className="text-sm font-medium text-gray-300">Covers:</span>
+                      <span className="text-sm font-bold text-blue-400">{getNumericValue(metrics.dailyCovers)}</span>
+                    </div>
+                    <div className="flex justify-between items-center p-3 bg-[#18181b] rounded-lg border border-gray-700/50">
+                      <span className="text-sm font-medium text-gray-300">Status:</span>
+                      <span className={`px-3 py-1 rounded-full text-xs font-bold ${
                         savedMetrics.some(m => m.date === selectedDate) 
-                          ? 'bg-green-600 text-white' 
-                          : 'bg-yellow-600 text-white'
+                          ? 'bg-green-600/20 text-green-400 border border-green-500/30' 
+                          : 'bg-yellow-600/20 text-yellow-400 border border-yellow-500/30'
                       }`}>
-                        {savedMetrics.some(m => m.date === selectedDate) ? 'Saved' : 'Unsaved'}
+                        {savedMetrics.some(m => m.date === selectedDate) ? '✓ Saved' : '⚠ Unsaved'}
                       </span>
                     </div>
                   </div>
                 </Card>
 
-                {/* Quick Actions */}
-                <Card className="bg-[#23232a] rounded-xl p-6">
-                  <CardTitle className="font-bold text-lg mb-4 text-white">Quick Actions</CardTitle>
+                {/* Enhanced Quick Actions */}
+                <Card className="bg-gradient-to-br from-[#23232a] to-[#1f1f26] rounded-xl p-6 border border-gray-700/50 shadow-lg">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-purple-600/20 p-2 rounded-lg border border-purple-500/30">
+                      <svg className="h-5 w-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                    </div>
+                    <CardTitle className="font-bold text-lg text-white">Quick Actions</CardTitle>
+                  </div>
                   <div className="space-y-3">
                     <Button
                       onClick={() => {
@@ -1808,8 +2566,11 @@ export default function AdminDashboard() {
                                        String(today.getDate()).padStart(2, '0');
                         handleDateChange(todayStr);
                       }}
-                      className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+                      className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white cursor-pointer shadow-lg hover:shadow-xl transition-all duration-200 flex items-center gap-2"
                     >
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3a4 4 0 118 0v4m-4 10V8a7 7 0 00-7 7v5a2 2 0 002 2h10a2 2 0 002-2v-5a7 7 0 00-7-7zM15 11V8a3 3 0 00-6 0v3h6z" />
+                      </svg>
                       Load Today's Data
                     </Button>
                     <Button
@@ -1821,16 +2582,34 @@ export default function AdminDashboard() {
                                            String(yesterday.getDate()).padStart(2, '0');
                         handleDateChange(yesterdayStr);
                       }}
-                      className="w-full bg-purple-600 hover:bg-purple-700 text-white"
+                      className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white cursor-pointer shadow-lg hover:shadow-xl transition-all duration-200 flex items-center gap-2"
                     >
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
                       Load Yesterday's Data
                     </Button>
                     <Button
                       onClick={saveMetricsForDate}
                       disabled={savingMetrics}
-                      className="w-full bg-green-600 hover:bg-green-700 text-white disabled:opacity-50"
+                      className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white disabled:opacity-50 cursor-pointer shadow-lg hover:shadow-xl transition-all duration-200 flex items-center gap-2"
                     >
-                      {savingMetrics ? 'Saving...' : 'Save Current Data'}
+                      {savingMetrics ? (
+                        <>
+                          <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          Save Current Data
+                        </>
+                      )}
                     </Button>
                   </div>
                 </Card>
@@ -1895,13 +2674,20 @@ export default function AdminDashboard() {
                 </div>
                 <form className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
                   <div>
-                    <label className="block text-base font-semibold mb-2 text-white">Daily Revenue ($)</label>
+                    <label className="block text-base font-semibold mb-2 text-white flex items-center gap-2">
+                      Daily Revenue ($)
+                      {autoMetrics.estimatedRevenue > 0 && (
+                        <span className="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded">
+                          Est: ${autoMetrics.estimatedRevenue.toLocaleString()}
+                        </span>
+                      )}
+                    </label>
                     <input 
                       type="number" 
                       name="dailyRevenue" 
                       value={metrics.dailyRevenue} 
                       onChange={handleMetricChange} 
-                      placeholder="0.00"
+                      placeholder={autoMetrics.estimatedRevenue > 0 ? `${autoMetrics.estimatedRevenue.toFixed(2)} (estimated)` : "0.00"}
                       min="0"
                       step="0.01"
                       className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-blue-500 focus:outline-none transition-colors" 
@@ -1923,19 +2709,24 @@ export default function AdminDashboard() {
                     <div className="text-xs text-gray-400 mt-1">Average spend per customer (defaults to $25 for charts)</div>
                   </div>
                   <div>
-                    <label className="block text-base font-semibold mb-2 text-white">Food Cost Percentage (%)</label>
+                    <label className="block text-base font-semibold mb-2 text-white flex items-center gap-2">
+                      Food Cost Percentage (%)
+                      <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-1 rounded">
+                        Suggested: 30%
+                      </span>
+                    </label>
                     <input 
                       type="number" 
                       step="0.1" 
                       name="foodCostPercent" 
                       value={metrics.foodCostPercent} 
                       onChange={handleMetricChange} 
-                      placeholder="0.0"
+                      placeholder="30.0 (industry standard)"
                       min="0"
                       max="100"
                       className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-yellow-500 focus:outline-none transition-colors" 
                     />
-                    <div className="text-xs text-gray-400 mt-1">Target: 28-35%</div>
+                    <div className="text-xs text-gray-400 mt-1">Target: 28-35% (industry benchmark)</div>
                   </div>
                   <div>
                     <label className="block text-base font-semibold mb-2 text-white">Labor Cost Percentage (%)</label>
@@ -1953,41 +2744,60 @@ export default function AdminDashboard() {
                     <div className="text-xs text-gray-400 mt-1">Target: 25-35%</div>
                   </div>
                   <div>
-                    <label className="block text-base font-semibold mb-2 text-white">Daily Covers</label>
+                    <label className="block text-base font-semibold mb-2 text-white flex items-center gap-2">
+                      Daily Covers
+                      {autoMetrics.dailyCovers > 0 && (
+                        <span className="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded">
+                          Auto: {autoMetrics.dailyCovers}
+                        </span>
+                      )}
+                    </label>
                     <input 
                       type="number" 
                       name="dailyCovers" 
                       value={metrics.dailyCovers} 
                       onChange={handleMetricChange} 
-                      placeholder="0"
+                      placeholder={autoMetrics.dailyCovers > 0 ? `${autoMetrics.dailyCovers} (from reservations)` : "0"}
                       min="0"
                       className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-cyan-500 focus:outline-none transition-colors" 
                     />
                     <div className="text-xs text-gray-400 mt-1">Number of customers served today</div>
                   </div>
                   <div>
-                    <label className="block text-base font-semibold mb-2 text-white">Table Turnover Rate</label>
+                    <label className="block text-base font-semibold mb-2 text-white flex items-center gap-2">
+                      Table Turnover Rate
+                      <span className="text-xs bg-orange-500/20 text-orange-400 px-2 py-1 rounded">
+                        Target: 2-3x
+                      </span>
+                    </label>
                     <input 
                       type="number" 
                       step="0.1" 
                       name="tableTurnover" 
                       value={metrics.tableTurnover} 
                       onChange={handleMetricChange} 
-                      placeholder="0.0"
+                      placeholder="2.5 (industry average)"
                       min="0"
                       className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-orange-500 focus:outline-none transition-colors" 
                     />
-                    <div className="text-xs text-gray-400 mt-1">Average times tables are used per day</div>
+                    <div className="text-xs text-gray-400 mt-1">Average times tables are used per day (2-3x is typical)</div>
                   </div>
                   <div>
-                    <label className="block text-base font-semibold mb-2 text-white">Reservation Rate (%)</label>
+                    <label className="block text-base font-semibold mb-2 text-white flex items-center gap-2">
+                      Reservation Rate (%)
+                      {autoMetrics.reservationRate > 0 && (
+                        <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded">
+                          Auto: {autoMetrics.reservationRate}%
+                        </span>
+                      )}
+                    </label>
                     <input 
                       type="number" 
                       step="0.1" 
                       name="reservationRate" 
                       value={metrics.reservationRate} 
                       onChange={handleMetricChange} 
-                      placeholder="0.0"
+                      placeholder={autoMetrics.reservationRate > 0 ? `${autoMetrics.reservationRate}% (from bookings)` : "0.0"}
                       min="0"
                       max="100"
                       className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-pink-500 focus:outline-none transition-colors" 
@@ -1995,19 +2805,24 @@ export default function AdminDashboard() {
                     <div className="text-xs text-gray-400 mt-1">Percentage of tables with reservations</div>
                   </div>
                   <div>
-                    <label className="block text-base font-semibold mb-2 text-white">Waste Percentage (%)</label>
+                    <label className="block text-base font-semibold mb-2 text-white flex items-center gap-2">
+                      Waste Percentage (%)
+                      <span className="text-xs bg-red-500/20 text-red-400 px-2 py-1 rounded">
+                        Target: &lt;4%
+                      </span>
+                    </label>
                     <input 
                       type="number" 
                       step="0.1" 
                       name="wastePercent" 
                       value={metrics.wastePercent} 
                       onChange={handleMetricChange} 
-                      placeholder="0.0"
+                      placeholder="3.0 (industry best practice)"
                       min="0"
                       max="100"
                       className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-red-500 focus:outline-none transition-colors" 
                     />
-                    <div className="text-xs text-gray-400 mt-1">Food waste as percentage of total food cost</div>
+                    <div className="text-xs text-gray-400 mt-1">Food waste as percentage of total food cost (aim for &lt;4%)</div>
                   </div>
                 </form>
                 
@@ -2015,7 +2830,7 @@ export default function AdminDashboard() {
                   <Button 
                     onClick={saveMetricsForDate}
                     disabled={savingMetrics}
-                    className="bg-green-600 hover:bg-green-700 text-white px-8 py-3 text-lg font-semibold rounded-lg transition-colors disabled:opacity-50"
+                    className="bg-green-600 hover:bg-green-700 text-white px-8 py-3 text-lg font-semibold rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
                   >
                     {savingMetrics ? 'Saving...' : `Save Metrics for ${new Date(selectedDate + 'T00:00:00').toLocaleDateString()}`}
                   </Button>
@@ -2025,7 +2840,9 @@ export default function AdminDashboard() {
                       if (reservations.length > 0) {
                         generateChartData(reservations);
                       }
-                      alert("Dashboard analytics updated with current metrics!");
+                      toast.success("Dashboard analytics updated with current metrics", {
+                        description: "Charts and visualizations refreshed with latest data"
+                      });
                     }}
                     className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 text-lg font-semibold rounded-lg transition-colors"
                   >
@@ -2035,25 +2852,46 @@ export default function AdminDashboard() {
               </Card>
             </div>
           )}
+
+          {/* Inventory Section */}
+          {activeSection === "inventory" && (
+            <InventoryManagement />
+          )}
+
           {/* Reservations Section */}
           {activeSection === "reservations" && (
             <div className="space-y-6">
-              {/* Header with Add Reservation Button */}
-              <Card className="bg-[#23232a] rounded-xl p-6">
-                <div className="flex flex-row justify-between items-center">
-                  <div className="flex items-center gap-3">
-                    <CardTitle className="text-white">Customer Reservations</CardTitle>
+              {/* Enhanced Header with Gradient Background */}
+              <Card className="bg-gradient-to-r from-[#23232a] via-[#2a2a32] to-[#23232a] rounded-xl p-6 border border-gray-700/50 shadow-lg">
+                <div className="flex flex-row justify-between items-center mb-4">
+                  <div className="flex items-center gap-4">
+                    <div className="bg-blue-600/20 p-3 rounded-lg border border-blue-500/30">
+                      <UserGroupIcon className="h-6 w-6 text-blue-400" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-white text-xl font-bold">Customer Reservations</CardTitle>
+                      <p className="text-gray-400 text-sm mt-1">Manage bookings and track guest preferences</p>
+                    </div>
                     {reservations.filter(r => r.status === 'pending').length > 0 && (
-                      <span className="bg-yellow-600 text-yellow-100 px-3 py-1 rounded-full text-sm font-medium">
-                        {reservations.filter(r => r.status === 'pending').length} Pending Approval
-                      </span>
+                      <div className="relative">
+                        <button
+                          onClick={() => setReservationSort('status-desc')}
+                          className="bg-gradient-to-r from-yellow-500 to-orange-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg hover:from-yellow-600 hover:to-orange-600 transition-all duration-200 cursor-pointer"
+                        >
+                          {reservations.filter(r => r.status === 'pending').length} Pending Approval
+                        </button>
+                        <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-ping"></div>
+                      </div>
                     )}
                   </div>
                   <div className="flex gap-3">
                     <Button 
                       onClick={() => setShowAddForm(!showAddForm)}
-                      className="bg-green-600 hover:bg-green-700 text-white"
+                      className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white cursor-pointer shadow-lg hover:shadow-xl transition-all duration-200 flex items-center gap-2"
                     >
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
                       {showAddForm ? "Cancel Add" : "Add Reservation"}
                     </Button>
                     <Button 
@@ -2063,170 +2901,382 @@ export default function AdminDashboard() {
                         await fetchReservations();
                       }} 
                       disabled={reservationsLoading}
+                      className="cursor-pointer border-gray-600 hover:bg-gray-700/50 hover:border-gray-500 transition-all duration-200 flex items-center gap-2"
                     >
+                      <svg className={`h-4 w-4 ${reservationsLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
                       {reservationsLoading ? "Refreshing..." : "Refresh"}
                     </Button>
                   </div>
                 </div>
               </Card>
 
-              {/* Add Reservation Form */}
+              {/* Enhanced Add Reservation Form */}
               {showAddForm && (
-                <Card className="bg-[#23232a] rounded-xl p-6">
-                  <CardTitle className="text-white mb-4">Add New Reservation</CardTitle>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                    <div>
-                      <label className="block text-sm font-semibold mb-2 text-white">Customer Name *</label>
+                <Card className="bg-gradient-to-br from-[#23232a] to-[#1f1f26] rounded-xl p-6 border border-gray-700/50 shadow-xl">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="bg-green-600/20 p-2 rounded-lg border border-green-500/30">
+                      <svg className="h-5 w-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
+                    </div>
+                    <CardTitle className="text-white text-lg font-bold">Add New Reservation</CardTitle>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <div className="space-y-2">
+                      <label className="block text-sm font-semibold text-white flex items-center gap-2">
+                        <svg className="h-4 w-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                        </svg>
+                        Customer Name *
+                      </label>
                       <input
                         type="text"
                         value={newReservation.name}
                         onChange={(e) => handleNewReservationChange('name', e.target.value)}
                         placeholder="Enter customer name"
-                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans focus:border-green-500 focus:outline-none"
+                        className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white border border-gray-600 font-sans focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20 transition-all duration-200"
                       />
                     </div>
-                    <div>
-                      <label className="block text-sm font-semibold mb-2 text-white">Email Address *</label>
+                    <div className="space-y-2">
+                      <label className="block text-sm font-semibold text-white flex items-center gap-2">
+                        <svg className="h-4 w-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                        Email Address *
+                      </label>
                       <input
                         type="email"
                         value={newReservation.email}
                         onChange={(e) => handleNewReservationChange('email', e.target.value)}
                         placeholder="customer@email.com"
-                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans focus:border-green-500 focus:outline-none"
+                        className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white border border-gray-600 font-sans focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20 transition-all duration-200"
                       />
                     </div>
-                    <div>
-                      <label className="block text-sm font-semibold mb-2 text-white">Phone Number *</label>
+                    <div className="space-y-2">
+                      <label className="block text-sm font-semibold text-white flex items-center gap-2">
+                        <svg className="h-4 w-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                        </svg>
+                        Phone Number *
+                      </label>
                       <input
                         type="tel"
                         value={newReservation.phone}
                         onChange={(e) => handleNewReservationChange('phone', e.target.value)}
                         placeholder="(555) 123-4567"
-                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans focus:border-green-500 focus:outline-none"
+                        className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white border border-gray-600 font-sans focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20 transition-all duration-200"
                       />
                     </div>
-                    <div>
-                      <label className="block text-sm font-semibold mb-2 text-white">Party Size *</label>
+                    <div className="space-y-2">
+                      <label className="block text-sm font-semibold text-white flex items-center gap-2">
+                        <svg className="h-4 w-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                        </svg>
+                        Party Size *
+                      </label>
                       <input
                         type="number"
                         min="1"
                         max="20"
                         value={newReservation.party_size}
                         onChange={(e) => handleNewReservationChange('party_size', parseInt(e.target.value))}
-                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans focus:border-green-500 focus:outline-none"
+                        className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white border border-gray-600 font-sans focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20 transition-all duration-200"
                       />
                     </div>
-                    <div className="md:col-span-2">
-                      <label className="block text-sm font-semibold mb-2 text-white">Reservation Date & Time *</label>
+                    <div className="md:col-span-2 space-y-2">
+                      <label className="block text-sm font-semibold text-white flex items-center gap-2">
+                        <svg className="h-4 w-4 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3a4 4 0 118 0v4m-4 10V8a7 7 0 00-7 7v5a2 2 0 002 2h10a2 2 0 002-2v-5a7 7 0 00-7-7zM15 11V8a3 3 0 00-6 0v3h6z" />
+                        </svg>
+                        Reservation Date & Time *
+                      </label>
                       <input
                         type="datetime-local"
                         value={newReservation.datetime}
                         onChange={(e) => handleNewReservationChange('datetime', e.target.value)}
                         min={new Date().toISOString().slice(0, 16)}
-                        className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans focus:border-green-500 focus:outline-none"
+                        className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white border border-gray-600 font-sans focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20 transition-all duration-200"
                       />
                     </div>
                   </div>
-                  <div className="flex gap-3">
+                  <div className="flex gap-4 pt-4 border-t border-gray-700/50">
                     <Button
                       onClick={handleAddReservation}
                       disabled={savingNewReservation}
-                      className="bg-green-600 hover:bg-green-700 text-white"
+                      className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white cursor-pointer shadow-lg hover:shadow-xl transition-all duration-200 flex items-center gap-2"
                     >
-                      {savingNewReservation ? "Creating..." : "Create Reservation"}
+                      {savingNewReservation ? (
+                        <>
+                          <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Creating...
+                        </>
+                      ) : (
+                        <>
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          Create Reservation
+                        </>
+                      )}
                     </Button>
                     <Button
                       variant="outline"
                       onClick={handleCancelAdd}
-                      className="text-gray-300 border-gray-600 hover:bg-gray-700"
+                      className="text-gray-300 border-gray-600 hover:bg-gray-700/50 hover:border-gray-500 cursor-pointer transition-all duration-200 flex items-center gap-2"
                     >
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
                       Cancel
                     </Button>
                   </div>
                 </Card>
               )}
 
-              {/* Reservations Table */}
-              <Card className="bg-[#23232a] rounded-xl p-8">
+              {/* Enhanced Reservations Table */}
+              <Card className="bg-gradient-to-br from-[#23232a] to-[#1f1f26] rounded-xl p-8 border border-gray-700/50 shadow-xl">
+                <div className="flex justify-between items-center mb-6">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-blue-600/20 p-2 rounded-lg border border-blue-500/30">
+                      <svg className="h-5 w-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                      </svg>
+                    </div>
+                    <h2 className="text-xl font-bold text-white">Reservations Management</h2>
+                  </div>
+                  <div className="flex gap-3">
+                    <Button
+                      onClick={handleCleanupPastReservations}
+                      disabled={cleanupLoading || deleteAllLoading}
+                      className="bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 text-white cursor-pointer shadow-lg hover:shadow-xl transition-all duration-200 flex items-center gap-2"
+                    >
+                      {cleanupLoading ? (
+                        <>
+                          <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Cleaning...
+                        </>
+                      ) : (
+                        <>
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                          Cleanup Past Reservations
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      onClick={handleDeleteAllReservations}
+                      disabled={cleanupLoading || deleteAllLoading}
+                      className="bg-gradient-to-r from-red-800 to-red-900 hover:from-red-900 hover:to-red-950 text-white cursor-pointer border border-red-600 shadow-lg hover:shadow-xl transition-all duration-200 flex items-center gap-2"
+                    >
+                      {deleteAllLoading ? (
+                        <>
+                          <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Deleting...
+                        </>
+                      ) : (
+                        <>
+                          🗑️ Delete All
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Enhanced Search Bar with Better Styling */}
+                <div className="flex items-center gap-4 mb-6 p-4 bg-gradient-to-r from-[#18181b] to-[#1a1a1f] rounded-xl border border-gray-700/50 shadow-inner">
+                  <div className="relative flex-1 max-w-2xl">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <svg className="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    </div>
+                    <input
+                      type="text"
+                      value={reservationSearch}
+                      onChange={(e) => setReservationSearch(e.target.value)}
+                      placeholder="Search reservations by name, email, phone, status, or date..."
+                      className="w-full pl-10 pr-4 py-3 rounded-lg bg-[#23232a] text-white border border-gray-600 font-sans focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all duration-200 placeholder-gray-400"
+                    />
+                    {reservationSearch && (
+                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
+                        <button
+                          onClick={() => setReservationSearch('')}
+                          className="text-gray-400 hover:text-white transition-colors duration-200"
+                        >
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {reservationSearch && (
+                    <div className="flex items-center gap-2 text-sm text-gray-400">
+                      <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                      <span>Filtering results...</span>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Enhanced Search Results Indicator */}
+                {reservationSearch && (
+                  <div className="mb-4 p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+                    <div className="text-sm text-blue-300 flex items-center gap-2">
+                      <svg className="h-4 w-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      {(() => {
+                        const filteredCount = reservations.filter(r => {
+                          const searchLower = reservationSearch.toLowerCase();
+                          return (
+                            (r.displayName || '').toLowerCase().includes(searchLower) ||
+                            (r.displayEmail || '').toLowerCase().includes(searchLower) ||
+                            (r.displayPhone || '').toLowerCase().includes(searchLower) ||
+                            (r.status || '').toLowerCase().includes(searchLower) ||
+                            new Date(r.datetime).toLocaleDateString().includes(searchLower)
+                          );
+                        }).length;
+                        return `Found ${filteredCount} of ${reservations.length} reservations matching "${reservationSearch}"`;
+                      })()}
+                    </div>
+                  </div>
+                )}
+                
                 <CardContent>
                   <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm bg-[#18181b] rounded-lg overflow-hidden">
+                    <table className="min-w-full text-sm bg-gradient-to-br from-[#18181b] to-[#1a1a1f] rounded-lg overflow-hidden border border-gray-700/50">
                       <thead>
-                        <tr className="bg-[#111113] text-white border-b border-gray-600">
+                        <tr className="bg-gradient-to-r from-[#111113] to-[#0f0f11] text-white border-b border-gray-600">
                           <th
-                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group"
+                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group hover:bg-gray-700/30 transition-colors duration-200"
                             onClick={() => setReservationSort(prev => prev === 'name-asc' ? 'name-desc' : 'name-asc')}
                             title="Sort by Name"
                           >
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-2">
+                              <svg className="h-4 w-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                              </svg>
                               Name
                               {(reservationSort === 'name-asc' || reservationSort === 'name-desc') && (
                                 <SortIcon direction={reservationSort === 'name-asc' ? 'asc' : 'desc'} color="text-blue-400" />
                               )}
-                              <InfoIcon />
                             </div>
                           </th>
-                          <th className="p-4 text-left font-semibold text-white">Email</th>
-                          <th className="p-4 text-left font-semibold text-white">Phone</th>
+                          <th className="p-4 text-left font-semibold text-white">
+                            <div className="flex items-center gap-2">
+                              <svg className="h-4 w-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                              </svg>
+                              Email
+                            </div>
+                          </th>
+                          <th className="p-4 text-left font-semibold text-white">
+                            <div className="flex items-center gap-2">
+                              <svg className="h-4 w-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                              </svg>
+                              Phone
+                            </div>
+                          </th>
                           <th
-                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group"
+                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group hover:bg-gray-700/30 transition-colors duration-200"
                             onClick={() => setReservationSort(prev => prev === 'party-asc' ? 'party-desc' : 'party-asc')}
                             title="Sort by Party Size"
                           >
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-2">
+                              <svg className="h-4 w-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                              </svg>
                               Party Size
                               {(reservationSort === 'party-asc' || reservationSort === 'party-desc') && (
-                                <SortIcon direction={reservationSort === 'party-asc' ? 'asc' : 'desc'} color="text-green-400" />
+                                <SortIcon direction={reservationSort === 'party-asc' ? 'asc' : 'desc'} color="text-cyan-400" />
                               )}
-                              <InfoIcon />
                             </div>
                           </th>
                           <th
-                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group"
+                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group hover:bg-gray-700/30 transition-colors duration-200"
                             onClick={() => setReservationSort(prev => prev === 'datetime-asc' ? 'datetime-desc' : 'datetime-asc')}
                             title="Sort by Date/Time"
                           >
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-2">
+                              <svg className="h-4 w-4 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3a4 4 0 118 0v4m-4 10V8a7 7 0 00-7 7v5a2 2 0 002 2h10a2 2 0 002-2v-5a7 7 0 00-7-7zM15 11V8a3 3 0 00-6 0v3h6z" />
+                              </svg>
                               Date/Time
                               {(reservationSort === 'datetime-asc' || reservationSort === 'datetime-desc') && (
-                                <SortIcon direction={reservationSort === 'datetime-asc' ? 'asc' : 'desc'} color="text-purple-400" />
+                                <SortIcon direction={reservationSort === 'datetime-asc' ? 'asc' : 'desc'} color="text-pink-400" />
                               )}
-                              <InfoIcon />
                             </div>
                           </th>
                           <th
-                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group"
+                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group hover:bg-gray-700/30 transition-colors duration-200"
                             onClick={() => setReservationSort(prev => prev === 'status-asc' ? 'status-desc' : 'status-asc')}
                             title="Sort by Status"
                           >
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-2">
+                              <svg className="h-4 w-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
                               Status
                               {(reservationSort === 'status-asc' || reservationSort === 'status-desc') && (
                                 <SortIcon direction={reservationSort === 'status-asc' ? 'asc' : 'desc'} color="text-yellow-400" />
                               )}
-                              <InfoIcon />
                             </div>
                           </th>
                           <th
-                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group"
+                            className="p-4 text-left font-semibold text-white cursor-pointer select-none group hover:bg-gray-700/30 transition-colors duration-200"
                             onClick={() => setReservationSort(prev => prev === 'type-asc' ? 'type-desc' : 'type-asc')}
                             title="Sort by Account Type"
                           >
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-2">
+                              <svg className="h-4 w-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                              </svg>
                               Type
                               {(reservationSort === 'type-asc' || reservationSort === 'type-desc') && (
-                                <SortIcon direction={reservationSort === 'type-asc' ? 'asc' : 'desc'} color="text-blue-400" />
+                                <SortIcon direction={reservationSort === 'type-asc' ? 'asc' : 'desc'} color="text-indigo-400" />
                               )}
-                              <InfoIcon />
                             </div>
                           </th>
-                          <th className="p-4 text-left font-semibold text-white">Actions</th>
+                          <th className="p-4 text-left font-semibold text-white">
+                            <div className="flex items-center gap-2">
+                              <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                              </svg>
+                              Actions
+                            </div>
+                          </th>
                         </tr>
                       </thead>
                       <tbody className="bg-[#18181b]">
                         {(() => {
-                          // Sort reservations based on reservationSort
-                          let sortedReservations = [...reservations];
+                          // Filter reservations based on search
+                          let filteredReservations = reservations.filter(r => {
+                            if (!reservationSearch) return true;
+                            const searchLower = reservationSearch.toLowerCase();
+                            return (
+                              (r.displayName || '').toLowerCase().includes(searchLower) ||
+                              (r.displayEmail || '').toLowerCase().includes(searchLower) ||
+                              (r.displayPhone || '').toLowerCase().includes(searchLower) ||
+                              (r.status || '').toLowerCase().includes(searchLower) ||
+                              new Date(r.datetime).toLocaleDateString().includes(searchLower)
+                            );
+                          });
+
+                          // Sort filtered reservations based on reservationSort
+                          let sortedReservations = [...filteredReservations];
                           if (reservationSort === 'datetime-asc') {
                             sortedReservations.sort((a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime());
                           } else if (reservationSort === 'datetime-desc') {
@@ -2357,7 +3407,7 @@ export default function AdminDashboard() {
                                   {r.status === 'pending' && <><ClockIcon className="w-3 h-3" /> Pending</>}
                                   {r.status === 'confirmed' && <><CheckCircleIcon className="w-3 h-3" /> Confirmed</>}
                                   {r.status === 'cancelled' && <><XCircleIcon className="w-3 h-3" /> Cancelled</>}
-                                  {!r.status && <><QuestionMarkCircleIcon className="w-3 h-3" /> Unknown</>}
+                                  {(!r.status || !['pending', 'confirmed', 'cancelled'].includes(r.status)) && <><QuestionMarkCircleIcon className="w-3 h-3" /> Unknown</>}
                                 </span>
                               </td>
                               
@@ -2380,7 +3430,7 @@ export default function AdminDashboard() {
                                       <Button
                                         size="sm"
                                         onClick={handleSaveReservation}
-                                        className="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1"
+                                        className="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 cursor-pointer"
                                       >
                                         Save
                                       </Button>
@@ -2388,7 +3438,7 @@ export default function AdminDashboard() {
                                         size="sm"
                                         variant="outline"
                                         onClick={handleCancelEdit}
-                                        className="text-gray-300 border-gray-600 hover:bg-gray-700 text-xs px-3 py-1"
+                                        className="text-gray-300 border-gray-600 hover:bg-gray-700 text-xs px-3 py-1 cursor-pointer"
                                       >
                                         Cancel
                                       </Button>
@@ -2401,7 +3451,7 @@ export default function AdminDashboard() {
                                           <Button
                                             size="sm"
                                             onClick={() => handleApproveReservation(r.id)}
-                                            className="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 inline-flex items-center gap-1"
+                                            className="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 inline-flex items-center gap-1 cursor-pointer"
                                           >
                                             <CheckCircleIcon className="w-3 h-3" />
                                             Approve
@@ -2410,7 +3460,7 @@ export default function AdminDashboard() {
                                             size="sm"
                                             variant="outline"
                                             onClick={() => handleRejectReservation(r.id)}
-                                            className="text-red-400 border-red-600 hover:bg-red-700 text-xs px-3 py-1 inline-flex items-center gap-1"
+                                            className="text-red-400 border-red-600 hover:bg-red-700 text-xs px-3 py-1 inline-flex items-center gap-1 cursor-pointer"
                                           >
                                             <XCircleIcon className="w-3 h-3" />
                                             Reject
@@ -2423,7 +3473,7 @@ export default function AdminDashboard() {
                                         size="sm"
                                         variant="outline"
                                         onClick={() => handleEditReservation(r)}
-                                        className="text-blue-400 border-blue-600 hover:bg-blue-700 text-xs px-3 py-1"
+                                        className="text-blue-400 border-blue-600 hover:bg-blue-700 text-xs px-3 py-1 cursor-pointer"
                                       >
                                         Edit
                                       </Button>
@@ -2431,7 +3481,7 @@ export default function AdminDashboard() {
                                         size="sm"
                                         variant="outline"
                                         onClick={() => handleDeleteReservation(r.id)}
-                                        className="text-red-400 border-red-600 hover:bg-red-700 text-xs px-3 py-1"
+                                        className="text-red-400 border-red-600 hover:bg-red-700 text-xs px-3 py-1 cursor-pointer"
                                       >
                                         Delete
                                       </Button>
@@ -2444,7 +3494,9 @@ export default function AdminDashboard() {
                           ) : (
                             <tr>
                               <td colSpan={8} className="text-gray-400 text-center py-8 bg-[#18181b]">
-                                {reservationsLoading ? "Loading reservations..." : "No reservations found. Click 'Add Reservation' to create your first booking."}
+                                {reservationsLoading ? "Loading reservations..." : 
+                                 reservationSearch ? `No reservations found matching "${reservationSearch}". Try a different search term.` :
+                                 "No reservations found. Click 'Add Reservation' to create your first booking."}
                               </td>
                             </tr>
                           );
@@ -2753,6 +3805,523 @@ export default function AdminDashboard() {
             </div>
           )}
 
+          {/* Staff Section */}
+          {activeSection === "staff" && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-white">Staff Management</h2>
+                <Button 
+                  onClick={() => setShowAddStaffForm(!showAddStaffForm)}
+                  className="bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-700 hover:to-cyan-700 text-white cursor-pointer"
+                >
+                  <UserIcon className="h-4 w-4 mr-2" />
+                  Add New Staff
+                </Button>
+              </div>
+
+              {/* Staff Overview Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <Card className="bg-[#23232a] border-gray-700">
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-gray-400 text-sm">Total Staff</p>
+                        <p className="text-2xl font-bold text-white">{staffMembers.length}</p>
+                      </div>
+                      <UserGroupIcon className="h-8 w-8 text-teal-500" />
+                    </div>
+                  </CardContent>
+                </Card>
+                
+                <Card className="bg-[#23232a] border-gray-700">
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-gray-400 text-sm">Active Today</p>
+                        <p className="text-2xl font-bold text-white">{staffMembers.filter(s => s.employment_status === 'active').length}</p>
+                      </div>
+                      <ClockIcon className="h-8 w-8 text-green-500" />
+                    </div>
+                  </CardContent>
+                </Card>
+                
+                <Card className="bg-[#23232a] border-gray-700">
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-gray-400 text-sm">Departments</p>
+                        <p className="text-2xl font-bold text-white">{new Set(staffMembers.map(s => s.role)).size}</p>
+                      </div>
+                      <BuildingStorefrontIcon className="h-8 w-8 text-blue-500" />
+                    </div>
+                  </CardContent>
+                </Card>
+                
+                <Card className="bg-[#23232a] border-gray-700">
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-gray-400 text-sm">Avg Hourly</p>
+                        <p className="text-2xl font-bold text-white">
+                          ${staffMembers.length > 0 ? (staffMembers.reduce((sum, s) => sum + (s.hourly_rate || 0), 0) / staffMembers.length).toFixed(2) : '0.00'}
+                        </p>
+                      </div>
+                      <CircleStackIcon className="h-8 w-8 text-yellow-500" />
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Add Staff Form */}
+              {showAddStaffForm && (
+                <Card className="bg-[#23232a] border-gray-700 mb-6">
+                  <CardHeader>
+                    <CardTitle className="text-white flex items-center gap-2">
+                      <UserIcon className="h-5 w-5" />
+                      Add New Staff Member
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <form onSubmit={handleAddStaff} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <div>
+                        <label className="text-white text-sm font-medium mb-2 block">Employee ID</label>
+                        <input
+                          type="text"
+                          name="employee_id"
+                          placeholder="EMP001"
+                          className="w-full bg-gray-800 text-white border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                          required
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="text-white text-sm font-medium mb-2 block">First Name</label>
+                        <input
+                          type="text"
+                          name="first_name"
+                          placeholder="John"
+                          className="w-full bg-gray-800 text-white border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                          required
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="text-white text-sm font-medium mb-2 block">Last Name</label>
+                        <input
+                          type="text"
+                          name="last_name"
+                          placeholder="Smith"
+                          className="w-full bg-gray-800 text-white border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                          required
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="text-white text-sm font-medium mb-2 block">Email</label>
+                        <input
+                          type="email"
+                          name="email"
+                          placeholder="john.smith@restaurant.com"
+                          className="w-full bg-gray-800 text-white border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="text-white text-sm font-medium mb-2 block">Phone</label>
+                        <input
+                          type="tel"
+                          name="phone"
+                          placeholder="555-0123"
+                          className="w-full bg-gray-800 text-white border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="text-white text-sm font-medium mb-2 block">Role</label>
+                        <select
+                          name="role"
+                          className="w-full bg-gray-800 text-white border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                          required
+                        >
+                          <option value="">Select Role</option>
+                          <option value="server">Server</option>
+                          <option value="cook">Cook</option>
+                          <option value="manager">Manager</option>
+                          <option value="host">Host</option>
+                          <option value="busser">Busser</option>
+                          <option value="bartender">Bartender</option>
+                          <option value="dishwasher">Dishwasher</option>
+                          <option value="prep_cook">Prep Cook</option>
+                          <option value="sous_chef">Sous Chef</option>
+                          <option value="head_chef">Head Chef</option>
+                        </select>
+                      </div>
+                      
+                      <div>
+                        <label className="text-white text-sm font-medium mb-2 block">Department</label>
+                        <select
+                          name="department"
+                          className="w-full bg-gray-800 text-white border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                        >
+                          <option value="">Select Department</option>
+                          <option value="kitchen">Kitchen</option>
+                          <option value="front_of_house">Front of House</option>
+                          <option value="management">Management</option>
+                          <option value="bar">Bar</option>
+                        </select>
+                      </div>
+                      
+                      <div>
+                        <label className="text-white text-sm font-medium mb-2 block">Hire Date</label>
+                        <input
+                          type="date"
+                          name="hire_date"
+                          className="w-full bg-gray-800 text-white border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                          required
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="text-white text-sm font-medium mb-2 block">Hourly Rate</label>
+                        <input
+                          type="number"
+                          name="hourly_rate"
+                          placeholder="15.00"
+                          step="0.01"
+                          min="0"
+                          className="w-full bg-gray-800 text-white border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                          required
+                        />
+                      </div>
+                      
+                      <div className="md:col-span-2 lg:col-span-3">
+                        <label className="text-white text-sm font-medium mb-2 block">Address</label>
+                        <textarea
+                          name="address"
+                          placeholder="123 Main St, City, State 12345"
+                          rows={2}
+                          className="w-full bg-gray-800 text-white border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="text-white text-sm font-medium mb-2 block">Emergency Contact Name</label>
+                        <input
+                          type="text"
+                          name="emergency_contact_name"
+                          placeholder="Jane Smith"
+                          className="w-full bg-gray-800 text-white border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="text-white text-sm font-medium mb-2 block">Emergency Contact Phone</label>
+                        <input
+                          type="tel"
+                          name="emergency_contact_phone"
+                          placeholder="555-0987"
+                          className="w-full bg-gray-800 text-white border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                        />
+                      </div>
+                      
+                      <div className="md:col-span-2 lg:col-span-3 flex gap-3 pt-4">
+                        <Button 
+                          type="submit" 
+                          disabled={loadingStaff}
+                          className="bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-700 hover:to-cyan-700 text-white cursor-pointer"
+                        >
+                          {loadingStaff ? 'Adding...' : 'Add Staff Member'}
+                        </Button>
+                        <Button 
+                          type="button" 
+                          variant="outline"
+                          onClick={() => setShowAddStaffForm(false)}
+                          className="border-gray-600 text-gray-300 hover:bg-gray-800 cursor-pointer"
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </form>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Staff List */}
+              <Card className="bg-[#23232a] border-gray-700">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-white flex items-center gap-2">
+                      <UserGroupIcon className="h-5 w-5" />
+                      Staff Members ({staffMembers.length})
+                    </CardTitle>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Search staff..."
+                        value={staffSearch}
+                        onChange={(e) => setStaffSearch(e.target.value)}
+                        className="bg-gray-800 text-white border border-gray-600 rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 cursor-text"
+                      />
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-gray-600">
+                          <th className="text-left text-gray-300 font-medium py-3 px-4">Employee</th>
+                          <th className="text-left text-gray-300 font-medium py-3 px-4">Role</th>
+                          <th className="text-left text-gray-300 font-medium py-3 px-4">Department</th>
+                          <th className="text-left text-gray-300 font-medium py-3 px-4">Status</th>
+                          <th className="text-left text-gray-300 font-medium py-3 px-4">Hourly Rate</th>
+                          <th className="text-left text-gray-300 font-medium py-3 px-4">Hire Date</th>
+                          <th className="text-left text-gray-300 font-medium py-3 px-4">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredStaff.map((staff) => (
+                          <tr key={staff.id} className="border-b border-gray-600 hover:bg-[#2a2a31] transition-colors">
+                            <td className="py-4 px-4">
+                              <div className="flex items-center gap-3">
+                                <div className="bg-gradient-to-br from-teal-600 to-cyan-600 rounded-full p-2 flex items-center justify-center">
+                                  <span className="text-white font-bold text-sm">
+                                    {staff.first_name.charAt(0)}{staff.last_name.charAt(0)}
+                                  </span>
+                                </div>
+                                <div>
+                                  <p className="text-white font-medium">{staff.first_name} {staff.last_name}</p>
+                                  <p className="text-gray-400 text-sm">{staff.employee_id}</p>
+                                  <p className="text-gray-400 text-sm">{staff.email}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-4 px-4">
+                              <span className="bg-purple-600/20 text-purple-400 px-2 py-1 rounded text-sm font-medium capitalize">
+                                {staff.role.replace('_', ' ')}
+                              </span>
+                            </td>
+                            <td className="py-4 px-4">
+                              <span className="text-gray-300 capitalize">
+                                {staff.department?.replace('_', ' ') || 'Not assigned'}
+                              </span>
+                            </td>
+                            <td className="py-4 px-4">
+                              <span className={`px-2 py-1 rounded text-sm font-medium ${
+                                staff.employment_status === 'active' 
+                                  ? 'bg-green-600/20 text-green-400' 
+                                  : staff.employment_status === 'inactive'
+                                  ? 'bg-yellow-600/20 text-yellow-400'
+                                  : 'bg-red-600/20 text-red-400'
+                              }`}>
+                                {staff.employment_status.charAt(0).toUpperCase() + staff.employment_status.slice(1)}
+                              </span>
+                            </td>
+                            <td className="py-4 px-4">
+                              <span className="text-white font-medium">${staff.hourly_rate}</span>
+                              <span className="text-gray-400 text-sm">/hr</span>
+                            </td>
+                            <td className="py-4 px-4">
+                              <span className="text-gray-300">
+                                {new Date(staff.hire_date).toLocaleDateString()}
+                              </span>
+                            </td>
+                            <td className="py-4 px-4">
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleEditStaff(staff)}
+                                  className="border-gray-600 text-gray-300 hover:bg-gray-800 cursor-pointer"
+                                >
+                                  Edit
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleToggleStaffStatus(staff.id, staff.employment_status)}
+                                  className={`border-gray-600 hover:bg-gray-800 cursor-pointer ${
+                                    staff.employment_status === 'active' 
+                                      ? 'text-yellow-400' 
+                                      : 'text-green-400'
+                                  }`}
+                                >
+                                  {staff.employment_status === 'active' ? 'Deactivate' : 'Activate'}
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    
+                    {filteredStaff.length === 0 && (
+                      <div className="text-center py-12">
+                        <UserIcon className="h-16 w-16 text-gray-500 mx-auto mb-4" />
+                        <h3 className="text-lg font-semibold text-white mb-2">No Staff Found</h3>
+                        <p className="text-gray-400">
+                          {staffSearch ? 'No staff members match your search.' : 'Add your first staff member to get started.'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Edit Staff Form */}
+                  {editingStaff && editingStaffData && (
+                    <div id="staff-edit-form" className="mt-8 border-t border-gray-600 pt-8">
+                      <h3 className="text-lg font-semibold text-white mb-4">Edit Staff Member</h3>
+                      <form onSubmit={handleUpdateStaff} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Basic Info */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-1">Employee ID</label>
+                          <Input 
+                            name="employee_id"
+                            value={editingStaffData.employee_id || ''}
+                            onChange={(e) => handleStaffDataChange('employee_id', e.target.value)}
+                            className="bg-[#2a2a31] border-gray-600 text-white"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-1">Role</label>
+                          <select 
+                            name="role"
+                            value={editingStaffData.role || ''}
+                            onChange={(e) => handleStaffDataChange('role', e.target.value)}
+                            className="w-full bg-[#2a2a31] border border-gray-600 rounded-md px-3 py-2 text-white"
+                            required
+                          >
+                            <option value="server">Server</option>
+                            <option value="host">Host</option>
+                            <option value="bartender">Bartender</option>
+                            <option value="cook">Cook</option>
+                            <option value="chef">Chef</option>
+                            <option value="dishwasher">Dishwasher</option>
+                            <option value="manager">Manager</option>
+                            <option value="assistant_manager">Assistant Manager</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-1">First Name</label>
+                          <Input 
+                            name="first_name"
+                            value={editingStaffData.first_name || ''}
+                            onChange={(e) => handleStaffDataChange('first_name', e.target.value)}
+                            className="bg-[#2a2a31] border-gray-600 text-white"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-1">Last Name</label>
+                          <Input 
+                            name="last_name"
+                            value={editingStaffData.last_name || ''}
+                            onChange={(e) => handleStaffDataChange('last_name', e.target.value)}
+                            className="bg-[#2a2a31] border-gray-600 text-white"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-1">Email</label>
+                          <Input 
+                            name="email"
+                            type="email"
+                            value={editingStaffData.email || ''}
+                            onChange={(e) => handleStaffDataChange('email', e.target.value)}
+                            className="bg-[#2a2a31] border-gray-600 text-white"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-1">Phone</label>
+                          <Input 
+                            name="phone"
+                            value={editingStaffData.phone || ''}
+                            onChange={(e) => handleStaffDataChange('phone', e.target.value)}
+                            className="bg-[#2a2a31] border-gray-600 text-white"
+                          />
+                        </div>
+                        <div className="md:col-span-2">
+                          <label className="block text-sm font-medium text-gray-300 mb-1">Address</label>
+                          <Input 
+                            name="address"
+                            value={editingStaffData.address || ''}
+                            onChange={(e) => handleStaffDataChange('address', e.target.value)}
+                            className="bg-[#2a2a31] border-gray-600 text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-1">Emergency Contact Name</label>
+                          <Input 
+                            name="emergency_contact_name"
+                            value={editingStaffData.emergency_contact_name || ''}
+                            onChange={(e) => handleStaffDataChange('emergency_contact_name', e.target.value)}
+                            className="bg-[#2a2a31] border-gray-600 text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-1">Emergency Contact Phone</label>
+                          <Input 
+                            name="emergency_contact_phone"
+                            value={editingStaffData.emergency_contact_phone || ''}
+                            onChange={(e) => handleStaffDataChange('emergency_contact_phone', e.target.value)}
+                            className="bg-[#2a2a31] border-gray-600 text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-1">Department</label>
+                          <select 
+                            name="department"
+                            value={editingStaffData.department || ''}
+                            onChange={(e) => handleStaffDataChange('department', e.target.value)}
+                            className="w-full bg-[#2a2a31] border border-gray-600 rounded-md px-3 py-2 text-white"
+                          >
+                            <option value="">Select Department</option>
+                            <option value="front_of_house">Front of House</option>
+                            <option value="back_of_house">Back of House</option>
+                            <option value="management">Management</option>
+                            <option value="maintenance">Maintenance</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-1">Hourly Rate ($)</label>
+                          <Input 
+                            name="hourly_rate"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={editingStaffData.hourly_rate || ''}
+                            onChange={(e) => handleStaffDataChange('hourly_rate', e.target.value)}
+                            className="bg-[#2a2a31] border-gray-600 text-white"
+                            required
+                          />
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="md:col-span-2 flex gap-3 pt-4">
+                          <Button 
+                            type="submit"
+                            className="bg-teal-600 hover:bg-teal-700 text-white cursor-pointer"
+                          >
+                            Save Changes
+                          </Button>
+                          <Button 
+                            type="button"
+                            variant="outline"
+                            onClick={handleCancelStaffEdit}
+                            className="border-gray-600 text-gray-300 hover:bg-gray-800 cursor-pointer"
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </form>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
           {/* Settings Section */}
           {activeSection === "settings" && (
             <Card className="bg-[#23232a] rounded-xl p-8 max-w-xl mx-auto">
@@ -2771,7 +4340,7 @@ export default function AdminDashboard() {
                   <input type="text" name="phone" value={profileSettings.phone} onChange={handleSettingsChange} className="w-full px-3 py-2 rounded bg-[#18181b] text-white border border-gray-700 font-sans" />
                 </div>
               </form>
-              <Button className="bg-white text-black border border-gray-700 hover:bg-gray-200" onClick={handleSettingsSave} disabled={settingsSaving}>
+              <Button className="bg-white text-black border border-gray-700 hover:bg-gray-200 cursor-pointer" onClick={handleSettingsSave} disabled={settingsSaving}>
                 {settingsSaving ? "Saving..." : "Save Settings"}
               </Button>
             </Card>
@@ -2842,7 +4411,7 @@ export default function AdminDashboard() {
                   </label>
                   <button
                     onClick={() => addField(editingTable)}
-                    className="px-3 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-sm"
+                    className="px-3 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-sm cursor-pointer"
                   >
                     + Add Field
                   </button>
@@ -2919,7 +4488,7 @@ export default function AdminDashboard() {
                       {/* Remove Field */}
                       <button
                         onClick={() => removeField(editingTable, index)}
-                        className="text-red-400 hover:text-red-300 px-2"
+                        className="text-red-400 hover:text-red-300 px-2 cursor-pointer"
                       >
                         🗑️
                       </button>
@@ -2932,23 +4501,42 @@ export default function AdminDashboard() {
             <div className="flex justify-end gap-3 mt-6">
               <button
                 onClick={() => setEditingTable(null)}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors cursor-pointer"
               >
                 Close
               </button>
               <button
                 onClick={() => {
                   // TODO: Generate and execute SQL
-                  alert('Schema changes saved! (SQL execution not implemented yet)');
+                  toast.info("Schema changes saved", {
+                    description: "SQL execution not implemented yet - changes are saved locally"
+                  });
                   setEditingTable(null);
                 }}
-                className="px-4 py-2 bg-blue-700 hover:bg-blue-600 text-white rounded transition-colors"
+                className="px-4 py-2 bg-blue-700 hover:bg-blue-600 text-white rounded transition-colors cursor-pointer"
               >
                 Save Changes
               </button>
             </div>
           </div>
         </div>
+      )}
+      
+      {/* Toaster for notifications - Only show when NOT in inventory section */}
+      {activeSection !== "inventory" && (
+        <Toaster 
+          position="top-right"
+          expand={true}
+          richColors={true}
+          closeButton={true}
+          toastOptions={{
+            style: {
+              background: '#23232a',
+              color: 'white',
+              border: '1px solid #374151',
+            },
+          }}
+        />
       )}
     </div>
   );
