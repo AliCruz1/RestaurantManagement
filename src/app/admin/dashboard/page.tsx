@@ -1,15 +1,16 @@
 
 "use client";
+import React, { ChangeEvent, FormEvent, MouseEvent } from 'react';
 import { useAuth } from "@/lib/authContext";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Bar, Line } from "react-chartjs-2";
 import { Chart, CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend } from "chart.js";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { HomeIcon, UserGroupIcon, ChartBarIcon, Cog6ToothIcon, BuildingStorefrontIcon, CircleStackIcon, ServerStackIcon, CheckCircleIcon, XCircleIcon, ClockIcon, QuestionMarkCircleIcon, UserIcon, LockClosedIcon, LightBulbIcon, CubeIcon, ExclamationTriangleIcon } from "@heroicons/react/24/outline";
+import { HomeIcon, UserGroupIcon, ChartBarIcon, Cog6ToothIcon, BuildingStorefrontIcon, CircleStackIcon, ServerStackIcon, CheckCircleIcon, XCircleIcon, ClockIcon, QuestionMarkCircleIcon, UserIcon, LockClosedIcon, LightBulbIcon, CubeIcon, ExclamationTriangleIcon, ChevronLeftIcon, ChevronRightIcon, TrashIcon } from "@heroicons/react/24/outline";
 import { SortIcon, InfoIcon } from "@/components/ui/sort-icons";
 import InventoryManagement from "@/components/InventoryManagement";
 import { toast, Toaster } from "sonner";
@@ -49,7 +50,7 @@ export default function AdminDashboard() {
     }
   }, [profile]);
 
-  const handleSettingsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSettingsChange = (e: ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setProfileSettings(prev => ({ ...prev, [name]: value }));
   };
@@ -135,7 +136,7 @@ ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
   };
 
   // ERD Drag and Drop Handlers
-  const handleMouseDown = (tableId: string, e: React.MouseEvent) => {
+  const handleMouseDown = (tableId: string, e: MouseEvent) => {
     e.preventDefault();
     setDragging(tableId);
     
@@ -159,7 +160,7 @@ ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
     });
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
+  const handleMouseMove = (e: MouseEvent) => {
     if (!dragging) return;
     
     // Get ERD container bounds consistently
@@ -313,6 +314,8 @@ ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
   const [reservations, setReservations] = useState<any[]>([]);
   const [reservationsLoading, setReservationsLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
   const [cleanupLoading, setCleanupLoading] = useState(false);
   const [deleteAllLoading, setDeleteAllLoading] = useState(false);
   const [editingReservation, setEditingReservation] = useState<string | null>(null);
@@ -365,16 +368,12 @@ ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
     avgPartySize: number;
     confirmedReservations: number;
     totalReservations: number;
-  }>({
-    dailyCovers: 0,
-    reservationRate: 0,
-    estimatedRevenue: 0,
-    avgPartySize: 0,
-    confirmedReservations: 0,
-    totalReservations: 0,
-  });
+  } | null>(null); // Start as null to prevent initial 0 values from showing
 
+  // Active main section (scheduling now nested under staff)
   const [activeSection, setActiveSection] = useState<"dashboard" | "dataentry" | "inventory" | "reservations" | "database" | "staff" | "settings">("dashboard");
+  // Staff sub-view: management list or scheduling
+  const [staffSubView, setStaffSubView] = useState<'management' | 'scheduling'>('management');
   
   // Staff management state
   const [staffMembers, setStaffMembers] = useState<any[]>([]);
@@ -383,6 +382,539 @@ ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
   const [editingStaffData, setEditingStaffData] = useState<any>(null);
   const [staffSearch, setStaffSearch] = useState('');
   const [loadingStaff, setLoadingStaff] = useState(false);
+  
+  // Scheduling state (Step 1)
+  const [schedules, setSchedules] = useState<any[]>([]);
+  const [loadingSchedules, setLoadingSchedules] = useState(false);
+  const [showAddScheduleForm, setShowAddScheduleForm] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState<string | null>(null);
+  const [editingScheduleData, setEditingScheduleData] = useState<any>(null);
+  const [scheduleView, setScheduleView] = useState<'list' | 'calendar'>('list');
+  // Scheduling filters & coverage targets
+  const [filterStaffId, setFilterStaffId] = useState<string>('');
+  const [filterRole, setFilterRole] = useState<string>('');
+  const [showRoleTargets, setShowRoleTargets] = useState(false);
+  const [roleTargets, setRoleTargets] = useState<Record<string, number>>({});
+  const [loadingRoleTargets, setLoadingRoleTargets] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showShiftModal, setShowShiftModal] = useState(false);
+  const [shiftModalData, setShiftModalData] = useState<any>(null);
+  const currentUserRole = currentProfile?.role || 'admin';
+  const canManageScheduling = ['admin','manager'].includes(currentUserRole);
+  // (Removed drag-resize state per request)
+  // Availability & Time Off State
+  const [availabilityStaffId, setAvailabilityStaffId] = useState<string | null>(null);
+  const [availability, setAvailability] = useState<any[]>([]); // rows {id, staff_id, weekday, is_available, start_time, end_time}
+  const [timeOff, setTimeOff] = useState<any[]>([]); // rows {id, staff_id, start_date, end_date, reason, status}
+  // Global (all staff) availability/time off for multi-staff visualization
+  const [allAvailability, setAllAvailability] = useState<any[]>([]);
+  const [allTimeOff, setAllTimeOff] = useState<any[]>([]);
+  const [loadingAvailability, setLoadingAvailability] = useState(false);
+  const [showAvailabilityPanel, setShowAvailabilityPanel] = useState(false);
+  const [weekStart, setWeekStart] = useState(() => {
+    const d = new Date();
+    // Set to Monday as start of week
+    const day = d.getDay(); // 0 Sun ... 6 Sat
+    const diff = (day === 0 ? -6 : 1) - day; // adjust so Monday is first, if Sunday go back 6 days
+    const monday = new Date(d);
+    monday.setDate(d.getDate() + diff);
+    monday.setHours(0,0,0,0);
+    return monday;
+  });
+
+  const goPrevWeek = () => setWeekStart(prev => { const d = new Date(prev); d.setDate(d.getDate()-7); return d; });
+  const goNextWeek = () => setWeekStart(prev => { const d = new Date(prev); d.setDate(d.getDate()+7); return d; });
+  const goCurrentWeek = () => setWeekStart(() => {
+    const d = new Date();
+    const day = d.getDay();
+    const diff = (day === 0 ? -6 : 1) - day;
+    const monday = new Date(d);
+    monday.setDate(d.getDate() + diff);
+    monday.setHours(0,0,0,0);
+    return monday;
+  });
+
+  // Determine if showing current week
+  const isCurrentWeek = useMemo(() => {
+    const now = new Date();
+    const day = now.getDay();
+    const diff = (day === 0 ? -6 : 1) - day;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + diff);
+    monday.setHours(0,0,0,0);
+    return monday.toISOString().slice(0,10) === weekStart.toISOString().slice(0,10);
+  }, [weekStart]);
+
+  // Drag & Drop -------------------------------------------------
+  const [draggingShiftId, setDraggingShiftId] = useState<string | null>(null);
+  const handleDragStart = (e: React.DragEvent, shiftId: string) => {
+    setDraggingShiftId(shiftId);
+    e.dataTransfer.setData('text/plain', shiftId);
+  };
+  const handleDragEnd = () => setDraggingShiftId(null);
+  const handleDayDragOver = (e: React.DragEvent) => { e.preventDefault(); };
+  const handleDayDrop = async (e: React.DragEvent, targetISO: string) => {
+    e.preventDefault();
+    const shiftId = draggingShiftId || e.dataTransfer.getData('text/plain');
+    if (!shiftId) return;
+    const shift = schedules.find(s => s.id === shiftId);
+    if (!shift || shift.scheduled_date === targetISO) return;
+    try {
+      const { error } = await supabase.from('staff_schedules').update({ scheduled_date: targetISO }).eq('id', shiftId);
+      if (error) throw error;
+      setSchedules(prev => prev.map(s => s.id === shiftId ? { ...s, scheduled_date: targetISO } : s));
+      toast.success('Shift moved');
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to move shift');
+    } finally {
+      setDraggingShiftId(null);
+    }
+  };
+
+  // Conflict detection (overlapping shifts for same staff on same day)
+  const conflictingShiftIds = useMemo(() => {
+    const map: Record<string, any[]> = {};
+    schedules.forEach(s => {
+      if (!s.scheduled_date) return;
+      const key = s.staff_id + '|' + s.scheduled_date;
+      (map[key] ||= []).push(s);
+    });
+    const conflicts = new Set<string>();
+    Object.values(map).forEach(list => {
+      list.sort((a,b) => (a.start_time || '').localeCompare(b.start_time || ''));
+      for (let i=0;i<list.length;i++) {
+        for (let j=i+1;j<list.length;j++) {
+          const a = list[i];
+          const b = list[j];
+          if (a.end_time && b.start_time && a.end_time > b.start_time && a.start_time < (b.end_time || b.start_time)) {
+            conflicts.add(a.id); conflicts.add(b.id);
+          }
+        }
+      }
+    });
+    return conflicts;
+  }, [schedules]);
+
+  // Week range derived arrays
+  const weekDays = useMemo(() => {
+    return Array.from({length:7}, (_,i) => {
+      const d = new Date(weekStart); d.setDate(weekStart.getDate()+i); return d; });
+  }, [weekStart]);
+
+  // Apply filters to schedules
+  const filteredSchedules = useMemo(() => {
+    return schedules.filter(s => {
+      if (filterStaffId && s.staff_id !== filterStaffId) return false;
+      const role = s.position || s.staff_members?.role || 'Unassigned';
+      if (filterRole && role !== filterRole) return false;
+      return true;
+    });
+  }, [schedules, filterStaffId, filterRole]);
+
+  const weekShifts = useMemo(() => {
+    const startISO = weekStart.toISOString().slice(0,10);
+    const end = new Date(weekStart); end.setDate(weekStart.getDate()+7);
+    const endISO = end.toISOString().slice(0,10);
+    return filteredSchedules.filter(s => s.scheduled_date >= startISO && s.scheduled_date < endISO);
+  }, [filteredSchedules, weekStart]);
+
+  const roleCoverage = useMemo(() => {
+    const cov: Record<string, number> = {};
+    weekShifts.forEach(s => { const r = s.position || s.staff_members?.role || 'Unassigned'; cov[r] = (cov[r]||0)+1; });
+    return Object.entries(cov).sort((a,b)=>a[0].localeCompare(b[0]));
+  }, [weekShifts]);
+
+  // Role targets from DB (staff_role_targets) with graceful fallback
+  const fetchRoleTargets = useCallback(async () => {
+    setLoadingRoleTargets(true);
+    try {
+      const { data, error } = await supabase.from('staff_role_targets').select('role, target');
+      if (error) {
+        if (error.code !== '42P01') throw error; // table missing
+      } else if (data) {
+        const map: Record<string, number> = {};
+        data.forEach((r: any)=> { map[r.role]=r.target; });
+        setRoleTargets(map);
+      }
+    } catch (err) { console.error('role targets fetch failed', err); }
+    finally { setLoadingRoleTargets(false); }
+  }, [supabase]);
+  useEffect(()=>{ fetchRoleTargets(); }, [fetchRoleTargets]);
+  const upsertRoleTarget = async (role: string, target: number) => {
+    setRoleTargets(prev => ({ ...prev, [role]: target }));
+    try {
+      const { error } = await supabase.from('staff_role_targets').upsert({ role, target });
+      if (error) throw error;
+    } catch (err) { console.error('save target failed', err); toast.error('Save target failed'); }
+  };
+  const updateRoleTarget = (role: string, value: string) => {
+    const num = Math.max(0, parseInt(value||'0',10) || 0);
+    upsertRoleTarget(role, num);
+  };
+
+  const weeklyHours = useMemo(() => {
+    const map: Record<string,{minutes:number;staff:any}> = {};
+    weekShifts.forEach(s => {
+      if (!s.start_time || !s.end_time) return;
+      const toMin = (t:string)=>{ const [H,M]=t.split(':').map(Number); return H*60+M; };
+      const mins = toMin(s.end_time)-toMin(s.start_time);
+      if (mins<=0) return;
+      if(!map[s.staff_id]) map[s.staff_id]={minutes:0,staff:s.staff_members};
+      map[s.staff_id].minutes += mins;
+    });
+    return Object.entries(map).map(([id,v]) => ({ staff_id:id, hours:+(v.minutes/60).toFixed(2), staff:v.staff})).sort((a,b)=>b.hours-a.hours);
+  }, [weekShifts]);
+
+  const exportWeekCSV = () => {
+    const headers = ['Employee','Date','Start','End','Position','Role'];
+    const rows = weekShifts.map(s => [ `${s.staff_members?.first_name||''} ${s.staff_members?.last_name||''}`.trim(), s.scheduled_date, s.start_time?.slice(0,5)||'', s.end_time?.slice(0,5)||'', s.position||'', s.staff_members?.role||'' ]);
+    const csv = [headers.join(','), ...rows.map(r=>r.map(f=>`"${String(f).replace(/"/g,'""')}"`).join(','))].join('\n');
+    const blob = new Blob([csv], { type:'text/csv' });
+    const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='schedule_week.csv'; a.click(); URL.revokeObjectURL(url);
+  };
+  const printWeekSchedule = () => { window.print(); };
+
+  // ================== INLINE SHIFT MODAL (CALENDAR) ==================
+  const openShiftModal = (shift: any) => {
+    setShiftModalData({ ...shift });
+    setShowShiftModal(true);
+  };
+  const closeShiftModal = () => { setShowShiftModal(false); setShiftModalData(null); };
+  const handleShiftModalChange = (field: string, value: any) => {
+    setShiftModalData((prev: any) => ({ ...prev, [field]: value }));
+  };
+  const saveShiftModal = async (e?: FormEvent) => {
+    if (e) e.preventDefault();
+    if (!shiftModalData?.id) return;
+    try {
+      const payload = {
+        scheduled_date: shiftModalData.scheduled_date,
+        start_time: shiftModalData.start_time,
+        end_time: shiftModalData.end_time,
+        position: shiftModalData.position || null,
+        station: shiftModalData.station || null,
+        status: shiftModalData.status || 'scheduled',
+        notes: shiftModalData.notes || null
+      };
+      const { error } = await supabase.from('staff_schedules').update(payload).eq('id', shiftModalData.id);
+      if (error) throw error;
+      setSchedules(prev => prev.map(s => s.id === shiftModalData.id ? { ...s, ...payload } : s));
+      toast.success('Shift updated');
+      closeShiftModal();
+    } catch (err) {
+      console.error('Inline shift update failed', err);
+      toast.error('Update failed');
+    }
+  };
+
+  // (Removed drag-resize handlers per request)
+
+  // ========================= AVAILABILITY & TIME OFF FUNCTIONS =========================
+  useEffect(() => {
+    if (!availabilityStaffId && staffMembers.length > 0) {
+      setAvailabilityStaffId(staffMembers[0].id);
+    }
+  }, [staffMembers, availabilityStaffId]);
+
+  const fetchAvailability = async (staffId: string) => {
+    setLoadingAvailability(true);
+    try {
+      // Default: fully available all days until admin sets specific constraints
+      const base = Array.from({length:7}, (_,i)=>({weekday:i,is_available:true,start_time:'00:00',end_time:'23:59'}));
+      let data: any = null;
+      let primaryError: any = null;
+      try {
+        const resp = await supabase
+          .from('staff_availability')
+          .select('id, staff_id, weekday, is_available, start_time, end_time')
+          .eq('staff_id', staffId)
+          .order('weekday');
+        if (resp.error) throw resp.error;
+        data = resp.data;
+      } catch (err: any) {
+        primaryError = err;
+        // Handle missing table
+        if (err.code === '42P01') {
+          console.warn('staff_availability table not found yet. Run provided SQL migration.');
+          setAvailability(base);
+          return;
+        }
+        // Handle missing column 42703; attempt fallback column names
+        if (err.code === '42703') {
+          const altColumns = ['day_of_week','day_index','day'];
+          let recovered = false;
+            for (const alt of altColumns) {
+              try {
+                const resp2 = await supabase
+                  .from('staff_availability')
+                  .select(`id, staff_id, ${alt}, is_available, start_time, end_time`)
+                  .eq('staff_id', staffId)
+                  .order(alt as any);
+                if (resp2.error) throw resp2.error;
+                // map alt column to weekday property
+                data = (resp2.data || []).map((r: any) => ({
+                  ...r,
+                  weekday: r[alt]
+                }));
+                recovered = true;
+                console.warn(`Using fallback column '${alt}' for availability; consider renaming to 'weekday'.`);
+                break;
+              } catch (inner) {
+                continue;
+              }
+            }
+          if (!recovered) throw err;
+        } else {
+          throw err;
+        }
+      }
+      const merged = base.map(row => data?.find((d: any)=>d.weekday===row.weekday) ? { ...row, ...data!.find((d: any)=>d.weekday===row.weekday) } : row);
+      setAvailability(merged);
+    } catch (err) {
+  console.error('Error fetching availability', err, (err as any)?.message, (err as any)?.code);
+      if ((err as any)?.code !== '42P01') toast.error('Failed availability');
+    } finally {
+      setLoadingAvailability(false);
+    }
+  };
+
+  const fetchTimeOff = async (staffId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('staff_time_off')
+        .select('id, staff_id, start_date, end_date, reason, status')
+        .eq('staff_id', staffId)
+        .order('start_date', { ascending: true });
+      if (error) {
+        if ((error as any).code === '42P01') {
+          console.warn('staff_time_off table not found yet. Run provided SQL migration.');
+          setTimeOff([]);
+          return;
+        }
+        throw error;
+      }
+      setTimeOff(data || []);
+    } catch (err) {
+  console.error('Error fetching time off', err, (err as any)?.message, (err as any)?.code);
+    }
+  };
+
+  useEffect(() => {
+    if (staffSubView === 'scheduling' && availabilityStaffId) {
+      fetchAvailability(availabilityStaffId);
+      fetchTimeOff(availabilityStaffId);
+    }
+  }, [staffSubView, availabilityStaffId]);
+
+  // ================= GLOBAL AVAILABILITY/TIME OFF (for showing everyone) =================
+  const fetchAllAvailability = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('staff_availability')
+        .select('id, staff_id, weekday, is_available, start_time, end_time');
+      if (error) {
+        if ((error as any).code !== '42P01') throw error;
+        return;
+      }
+      if (data && data.length>0) {
+        setAllAvailability(data);
+      } else {
+        // No availability rows yet: synthesize defaults (all available)
+        const synthetic: any[] = [];
+        staffMembers.forEach(sm => {
+          for (let i=0;i<7;i++) synthetic.push({ id: `synthetic-${sm.id}-${i}`, staff_id: sm.id, weekday: i, is_available: true, start_time: '00:00', end_time: '23:59' });
+        });
+        setAllAvailability(synthetic);
+      }
+    } catch (err) { console.error('fetchAllAvailability failed', err); }
+  }, []);
+
+  const fetchAllTimeOff = useCallback( async () => {
+    try {
+      const { data, error } = await supabase
+        .from('staff_time_off')
+        .select('id, staff_id, start_date, end_date, reason, status');
+      if (error) {
+        if ((error as any).code !== '42P01') throw error;
+        return;
+      }
+      setAllTimeOff(data || []);
+    } catch (err) { console.error('fetchAllTimeOff failed', err); }
+  }, []);
+
+  useEffect(() => {
+    if (staffSubView === 'scheduling') {
+      fetchAllAvailability();
+      fetchAllTimeOff();
+    }
+  }, [staffSubView, fetchAllAvailability, fetchAllTimeOff]);
+
+  const handleAvailabilityChange = (weekday: number, field: string, value: any) => {
+    setAvailability(prev => prev.map(r => r.weekday===weekday ? { ...r, [field]: value } : r));
+  };
+
+  const saveAvailability = async () => {
+    if (!availabilityStaffId) return;
+    try {
+      // Basic validation
+      for (const r of availability) {
+        if (r.is_available) {
+          if (!r.start_time || !r.end_time) {
+            toast.error('Fill start/end for available days');
+            return;
+          }
+          if (r.start_time >= r.end_time) {
+            toast.error('Start must be before end on '+['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][r.weekday]);
+            return;
+          }
+        }
+      }
+      const rows = availability.map(r => ({
+        staff_id: availabilityStaffId,
+        weekday: r.weekday,
+        is_available: r.is_available,
+        start_time: r.is_available ? r.start_time : null,
+        end_time: r.is_available ? r.end_time : null
+      }));
+      const { error } = await supabase.from('staff_availability').upsert(rows, { onConflict: 'staff_id,weekday' });
+      if (error) throw error;
+  toast.success('Availability saved');
+  fetchAvailability(availabilityStaffId);
+  fetchAllAvailability();
+    } catch (err) {
+      console.error('Availability save failed', err);
+      toast.error((err as any)?.message || 'Save failed');
+    }
+  };
+
+  const addTimeOff = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!availabilityStaffId) return;
+    const form = e.target as HTMLFormElement;
+    const fd = new FormData(form);
+    const start_date = fd.get('start_date');
+    const end_date = fd.get('end_date');
+    const reason = fd.get('reason');
+    try {
+      const { error } = await supabase.from('staff_time_off').insert({ staff_id: availabilityStaffId, start_date, end_date, reason, status: 'approved' });
+      if (error) throw error;
+  toast.success('Time off added');
+  form.reset();
+  fetchTimeOff(availabilityStaffId);
+  fetchAllTimeOff();
+    } catch (err) {
+      console.error(err);
+      toast.error('Time off failed');
+    }
+  };
+
+  // Normalize all availability: set every existing row to full day available and create any missing rows
+  const normalizeAvailability = async () => {
+    if (!canManageScheduling) { toast.error('Insufficient permissions'); return; }
+    if (!window.confirm('Normalize all availability to 24/7 (00:00-23:59) for every staff member? This overwrites existing availability windows.')) return;
+    try {
+      // 1. Update existing rows
+  // Some Postgres+Supabase policies may require a WHERE; use a broad filter that matches all rows
+  const { error: updErr } = await supabase.from('staff_availability').update({ is_available: true, start_time: '00:00', end_time: '23:59' }).gte('weekday', 0);
+      if (updErr && (updErr as any).code !== '42P01') throw updErr;
+      // 2. Fetch current rows (might be empty / table missing)
+      let existing: any[] = [];
+      if (!updErr || (updErr as any).code !== '42P01') {
+        const { data } = await supabase.from('staff_availability').select('staff_id, weekday');
+        existing = data || [];
+      }
+      const existingSet = new Set(existing.map(r => r.staff_id + '|' + r.weekday));
+      // 3. Build missing rows
+      const rows: any[] = [];
+      staffMembers.forEach(sm => {
+        for (let w=0; w<7; w++) {
+          const key = sm.id + '|' + w;
+          if (!existingSet.has(key)) {
+            rows.push({ staff_id: sm.id, weekday: w, is_available: true, start_time: '00:00', end_time: '23:59' });
+          }
+        }
+      });
+      if (rows.length > 0) {
+        const { error: insErr } = await supabase.from('staff_availability').upsert(rows, { onConflict: 'staff_id,weekday' });
+        if (insErr) throw insErr;
+      }
+      // 4. Refresh global + focused availability
+      if (availabilityStaffId) fetchAvailability(availabilityStaffId);
+      fetchAllAvailability();
+      toast.success('Availability normalized');
+    } catch (err:any) {
+      console.error('normalizeAvailability failed', err);
+      toast.error('Normalize failed', { description: err.message || String(err) });
+    }
+  };
+
+  const handleDeleteTimeOff = async (id: string) => {
+    if (!confirm('Delete this time off entry?')) return;
+    try {
+      const { error } = await supabase.from('staff_time_off').delete().eq('id', id);
+      if (error) throw error;
+  setTimeOff(prev => prev.filter(t => t.id !== id));
+  toast.success('Time off deleted');
+  fetchAllTimeOff();
+    } catch (err) {
+      console.error('Delete time off failed', err);
+      toast.error('Delete failed');
+    }
+  };
+
+  // Maps for global lookup
+  const globalAvailabilityMap = useMemo(() => {
+    // structure: { staff_id: { weekday: row } }
+    const out: Record<string, Record<number, any>> = {};
+    allAvailability.forEach(row => {
+      if (!out[row.staff_id]) out[row.staff_id] = {};
+      out[row.staff_id][row.weekday] = row;
+    });
+    return out;
+  }, [allAvailability]);
+  const globalTimeOffMap = useMemo(() => {
+    const out: Record<string, any[]> = {};
+    allTimeOff.forEach(r => { (out[r.staff_id] ||= []).push(r); });
+    return out;
+  }, [allTimeOff]);
+
+  // Unified scheduling refresh
+  const refreshSchedulingData = async () => {
+    await Promise.all([
+      fetchSchedules(),
+      fetchAllAvailability(),
+      fetchAllTimeOff(),
+      availabilityStaffId ? fetchAvailability(availabilityStaffId) : Promise.resolve(),
+      availabilityStaffId ? fetchTimeOff(availabilityStaffId) : Promise.resolve()
+    ]);
+    toast.success('Scheduling data refreshed');
+  };
+
+  // Helpers to flag shifts outside availability / in time off (for every staff)
+  const isShiftDuringTimeOff = (shift: any) => {
+    if (!shift?.scheduled_date) return false;
+    const ranges = globalTimeOffMap[shift.staff_id];
+    if (!ranges || ranges.length === 0) return false;
+    return ranges.some(r => shift.scheduled_date >= r.start_date && shift.scheduled_date <= r.end_date);
+  };
+  const isShiftOutsideAvailability = (shift: any) => {
+    if (!shift?.scheduled_date) return false;
+    const d = new Date(shift.scheduled_date + 'T00:00:00');
+    const js = d.getDay();
+    const weekday = js === 0 ? 6 : js - 1; // Monday index
+    const staffMap = globalAvailabilityMap[shift.staff_id];
+    if (!staffMap) return false; // no data => assume fine
+    const av = staffMap[weekday];
+    if (!av) return false;
+    if (!av.is_available) return true; // off-day
+    if (!shift.start_time || !shift.end_time) return false;
+    return (av.start_time && shift.start_time < av.start_time) || (av.end_time && shift.end_time > av.end_time);
+  };
+  const [selectedScheduleDate, setSelectedScheduleDate] = useState(() => {
+    const today = new Date();
+    return today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+  });
   
   // Data entry specific state
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -640,7 +1172,10 @@ ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
   const fetchReservations = async () => {
     setReservationsLoading(true);
     try {
+      console.log("🔄 Fetching fresh reservation data...");
+      
       // Fetch all reservations (both guest and authenticated user reservations)
+      // Add timestamp to ensure fresh data (bypass any caching)
       const { data, error } = await supabase
         .from("reservations")
         .select(`
@@ -656,6 +1191,7 @@ ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
           guest_phone,
           status
         `)
+        .gte('datetime', '2024-01-01') // Ensure we get all current reservations
         .order('datetime', { ascending: true });
       
       if (error) {
@@ -692,6 +1228,12 @@ ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
 
       // Calculate auto-metrics for the currently selected date
       calculateAutoMetrics(selectedDate);
+      
+      // Update last refreshed timestamp
+      setLastUpdated(new Date());
+      
+      // Mark initial data as loaded
+      setInitialDataLoaded(true);
     } catch (error) {
       console.error("Error in fetchReservations:", error);
       toast.error(`Error fetching reservations: ${error}`);
@@ -1340,7 +1882,7 @@ ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
     }
   };
 
-  const handleAddStaff = async (e: React.FormEvent) => {
+  const handleAddStaff = async (e: FormEvent) => {
     e.preventDefault();
     const formData = new FormData(e.target as HTMLFormElement);
     
@@ -1425,7 +1967,7 @@ ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
     }, 100);
   };
 
-  const handleUpdateStaff = async (e: React.FormEvent) => {
+  const handleUpdateStaff = async (e: FormEvent) => {
     e.preventDefault();
     
     try {
@@ -1490,28 +2032,206 @@ ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
     );
   });
 
+  // ========================= SCHEDULING FUNCTIONS (Phase 1: Read Only) =========================
+  const fetchSchedules = async () => {
+    setLoadingSchedules(true);
+    try {
+      const { data, error } = await supabase
+        .from('staff_schedules')
+        .select(`id, staff_id, scheduled_date, start_time, end_time, position, station, status, notes, staff_members ( first_name, last_name, role )`)
+        .order('scheduled_date', { ascending: true })
+        .order('start_time', { ascending: true });
+      if (error) throw error;
+      setSchedules(data || []);
+    } catch (err) {
+      console.error('Error fetching schedules:', err);
+      toast.error('Failed to load schedules');
+    } finally {
+      setLoadingSchedules(false);
+    }
+  };
+
+  // Load schedules when entering scheduling section first time
+  useEffect(() => {
+    if (activeSection === 'staff' && staffSubView === 'scheduling' && schedules.length === 0 && !loadingSchedules) {
+      fetchSchedules();
+    }
+  }, [activeSection, staffSubView]);
+
+  // ========================= SCHEDULING CRUD (Phase 2) =========================
+  const handleAddSchedule = async (e: FormEvent) => {
+    e.preventDefault();
+    const form = e.target as HTMLFormElement;
+    const formData = new FormData(form);
+    try {
+      const scheduleData: any = {
+        staff_id: formData.get('staff_id'),
+        scheduled_date: formData.get('scheduled_date'),
+        start_time: formData.get('start_time'),
+        end_time: formData.get('end_time'),
+        position: formData.get('position') || null,
+        station: formData.get('station') || null,
+        status: 'scheduled',
+        notes: formData.get('notes') || null,
+        created_by: profile?.id || null
+      };
+      if (!scheduleData.staff_id) {
+        toast.error('Select a staff member');
+        return;
+      }
+      const { data, error } = await supabase
+        .from('staff_schedules')
+        .insert([scheduleData])
+        .select('*')
+        .single();
+      if (error) throw error;
+      // Attach nested staff member info if not returned automatically
+      let enriched = data as any;
+      if (enriched && !enriched.staff_members) {
+        const sm = staffMembers.find(s => s.id === enriched.staff_id);
+        if (sm) enriched = { ...enriched, staff_members: { first_name: sm.first_name, last_name: sm.last_name, role: sm.role } };
+      }
+      setSchedules(prev => [...prev, enriched]);
+      setShowAddScheduleForm(false);
+      form.reset();
+      toast.success('Schedule created');
+    } catch (err) {
+      console.error('Error adding schedule', err);
+      toast.error('Failed to add schedule');
+    }
+  };
+
+  const handleEditSchedule = (schedule: any) => {
+    setEditingSchedule(schedule.id);
+    setEditingScheduleData(schedule);
+    setTimeout(() => {
+      const el = document.getElementById('schedule-edit-form');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 60);
+  };
+
+  const handleScheduleDataChange = (field: string, value: string) => {
+    setEditingScheduleData((prev: any) => ({ ...prev, [field]: value }));
+  };
+
+  const handleUpdateSchedule = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editingSchedule || !editingScheduleData) return;
+    try {
+      const updated = {
+        staff_id: editingScheduleData.staff_id,
+        scheduled_date: editingScheduleData.scheduled_date,
+        start_time: editingScheduleData.start_time,
+        end_time: editingScheduleData.end_time,
+        position: editingScheduleData.position || null,
+        station: editingScheduleData.station || null,
+        status: editingScheduleData.status,
+        notes: editingScheduleData.notes || null
+      };
+      const { error } = await supabase
+        .from('staff_schedules')
+        .update(updated)
+        .eq('id', editingSchedule);
+      if (error) throw error;
+      setSchedules(prev => prev.map(s => {
+        if (s.id === editingSchedule) {
+          // preserve existing staff_members if present
+            return { ...s, ...updated };
+        }
+        return s;
+      }));
+      setEditingSchedule(null);
+      setEditingScheduleData(null);
+      toast.success('Schedule updated');
+    } catch (err) {
+      console.error('Error updating schedule', err);
+      toast.error('Failed to update schedule');
+    }
+  };
+
+  const handleDeleteSchedule = async (id: string) => {
+    if (!confirm('Delete this schedule?')) return;
+    try {
+      const { error } = await supabase
+        .from('staff_schedules')
+        .delete()
+        .eq('id', id);
+      if (error) throw error;
+      setSchedules(prev => prev.filter(s => s.id !== id));
+      toast.success('Schedule deleted');
+    } catch (err) {
+      console.error('Error deleting schedule', err);
+      toast.error('Failed to delete schedule');
+    }
+  };
+
+  const handleCancelScheduleEdit = () => {
+    setEditingSchedule(null);
+    setEditingScheduleData(null);
+  };
+
   useEffect(() => {
     if (!loading && profile?.role === "admin") {
       console.log("Admin authenticated, fetching initial data");
+      
+      // Fetch analytics data
       supabase.rpc("get_reservations_per_day").then(({ data }) => {
         setAnalytics(data);
         setAnalyticsLoading(false);
       });
-      // Force fresh reservation data on mount
-      fetchReservations();
+      
+      // Force fresh reservation data on mount with a small delay to ensure fresh data
+      setTimeout(() => {
+        console.log("🔄 Initial fresh data fetch on dashboard load");
+        fetchReservations(); // This will calculate auto-metrics when data is loaded
+      }, 100);
+      
       // Load staff members
       fetchStaffMembers();
       // Load saved metrics list
       loadSavedMetricsList();
       // Load metrics for today
       loadMetricsForDate(selectedDate);
-      // Calculate auto-metrics for today
-      calculateAutoMetrics(selectedDate);
+      
+      // Don't calculate auto-metrics here - let fetchReservations handle it after data loads
     }
     if (!loading && (!profile || profile.role !== "admin")) {
       router.replace("/");
     }
   }, [profile, loading, router]);
+
+  // Auto-refresh reservation data every 30 seconds when on dashboard
+  useEffect(() => {
+    if (!loading && profile?.role === "admin" && activeSection === "dashboard") {
+      const interval = setInterval(() => {
+        console.log("🔄 Auto-refreshing reservation data...");
+        fetchReservations();
+        // Refresh analytics data as well
+        supabase.rpc("get_reservations_per_day").then(({ data }) => {
+          setAnalytics(data);
+        });
+      }, 30000); // Refresh every 30 seconds
+
+      return () => clearInterval(interval);
+    }
+  }, [loading, profile, activeSection]);
+
+  // Refresh data when returning to dashboard section
+  useEffect(() => {
+    if (!loading && profile?.role === "admin" && activeSection === "dashboard") {
+      console.log("📊 Returning to dashboard, refreshing data...");
+      fetchReservations();
+      calculateAutoMetrics(selectedDate);
+    }
+  }, [activeSection, profile, loading]);
+
+  // Recalculate auto-metrics whenever reservations data changes
+  useEffect(() => {
+    if (reservations.length >= 0) { // Include 0 to handle empty data
+      console.log("📊 Reservations data changed, recalculating metrics for", selectedDate);
+      calculateAutoMetrics(selectedDate);
+    }
+  }, [reservations, selectedDate]);
 
   // Generate chart data when reservations or metrics change
   useEffect(() => {
@@ -1647,21 +2367,20 @@ ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
     
     if (!selectedDate || reservations.length === 0) {
       console.log("❌ No date selected or no reservations available");
-      setAutoMetrics({
-        dailyCovers: 0,
-        reservationRate: 0,
-        estimatedRevenue: 0,
-        avgPartySize: 0,
-        confirmedReservations: 0,
-        totalReservations: 0,
-      });
+      setAutoMetrics(null);
       return;
     }
 
-    // Filter reservations for the selected date
+    // Filter reservations for the selected date with improved date handling
     const dateReservations = reservations.filter(reservation => {
-      const reservationDate = new Date(reservation.datetime).toISOString().split('T')[0];
-      return reservationDate === selectedDate;
+      // Handle both UTC and local dates properly
+      const reservationDate = new Date(reservation.datetime);
+      const reservationDateString = reservationDate.getFullYear() + '-' + 
+        String(reservationDate.getMonth() + 1).padStart(2, '0') + '-' + 
+        String(reservationDate.getDate()).padStart(2, '0');
+      
+      console.log(`🔍 Comparing: reservation date ${reservationDateString} vs selected ${selectedDate}`);
+      return reservationDateString === selectedDate;
     });
 
     console.log(`📅 Reservations for ${selectedDate}:`, dateReservations.length);
@@ -1694,7 +2413,7 @@ ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
   };
 
   // Data Entry handler
-  const handleMetricChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleMetricChange = (e: ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setMetrics(prev => ({ ...prev, [name]: value }));
   };
@@ -2134,6 +2853,8 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                     case "reservations": return "Reservations";
                     case "dataentry": return "Data Entry";
                     case "inventory": return "Inventory";
+                    case "staff": return "Staff";
+                    case "database": return "Database";
                     case "settings": return "Settings";
                     default: return "Dashboard";
                   }
@@ -2176,6 +2897,11 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                   <div className="text-center">
                     <h2 className="text-2xl font-bold text-white">Live Analytics Dashboard</h2>
                     <p className="text-gray-400 mt-1">Real-time metrics calculated from your reservation data</p>
+                    {lastUpdated && (
+                      <p className="text-gray-500 text-xs mt-1">
+                        Last updated: {lastUpdated.toLocaleTimeString()}
+                      </p>
+                    )}
                   </div>
                   <div className="px-4 py-2 bg-gradient-to-r from-green-500/20 to-emerald-500/20 text-green-400 rounded-full text-sm font-medium border border-green-500/30 flex items-center gap-2">
                     <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
@@ -2183,78 +2909,102 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                   </div>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-4">
-                  <Card className="bg-gradient-to-br from-green-600 to-green-700 rounded-2xl p-6 border-0 shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-105">
-                    <CardTitle className="font-bold text-lg text-white flex items-center gap-3">
-                      <div className="bg-white/20 p-2 rounded-lg">
-                        <UserGroupIcon className="h-6 w-6" />
+                {!initialDataLoaded || !autoMetrics ? (
+                  // Loading skeleton for auto-calculated metrics
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-4">
+                    {[1, 2, 3].map((i) => (
+                      <Card key={i} className="bg-gradient-to-br from-gray-600 to-gray-700 rounded-2xl p-6 border-0 shadow-2xl">
+                        <div className="animate-pulse">
+                          <div className="flex items-center gap-3 mb-4">
+                            <div className="bg-white/20 p-2 rounded-lg">
+                              <div className="h-6 w-6 bg-white/30 rounded"></div>
+                            </div>
+                            <div className="flex-1">
+                              <div className="h-4 bg-white/30 rounded mb-1"></div>
+                              <div className="h-3 bg-white/20 rounded"></div>
+                            </div>
+                          </div>
+                          <div className="h-12 bg-white/30 rounded mb-2"></div>
+                          <div className="h-4 bg-white/20 rounded"></div>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                ) : (
+                  // Actual metrics when data is loaded
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-4">
+                    <Card className="bg-gradient-to-br from-green-600 to-green-700 rounded-2xl p-6 border-0 shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-105">
+                      <CardTitle className="font-bold text-lg text-white flex items-center gap-3">
+                        <div className="bg-white/20 p-2 rounded-lg">
+                          <UserGroupIcon className="h-6 w-6" />
+                        </div>
+                        <div>
+                          <div>Daily Covers</div>
+                          <div className="text-xs font-normal text-green-100">Customer Traffic</div>
+                        </div>
+                      </CardTitle>
+                      <div className="text-4xl font-bold text-white mt-4">{autoMetrics.dailyCovers}</div>
+                      <div className="text-sm text-green-100 mt-2 flex items-center gap-2">
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        From {autoMetrics.confirmedReservations} confirmed reservations
                       </div>
-                      <div>
-                        <div>Daily Covers</div>
-                        <div className="text-xs font-normal text-green-100">Customer Traffic</div>
-                      </div>
-                    </CardTitle>
-                    <div className="text-4xl font-bold text-white mt-4">{autoMetrics.dailyCovers}</div>
-                    <div className="text-sm text-green-100 mt-2 flex items-center gap-2">
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      From {autoMetrics.confirmedReservations} confirmed reservations
+                      </Card>
+                      
+                      <Card className="bg-gradient-to-br from-blue-600 to-blue-700 rounded-2xl p-6 border-0 shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-105">
+                        <CardTitle className="font-bold text-lg text-white flex items-center gap-3">
+                          <div className="bg-white/20 p-2 rounded-lg">
+                            <CheckCircleIcon className="h-6 w-6" />
+                          </div>
+                          <div>
+                            <div>Confirmation Rate</div>
+                            <div className="text-xs font-normal text-blue-100">Booking Success</div>
+                          </div>
+                        </CardTitle>
+                        <div className="text-4xl font-bold text-white mt-4">{autoMetrics.reservationRate}%</div>
+                        <div className="text-sm text-blue-100 mt-2 flex items-center gap-2">
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                          </svg>
+                          {autoMetrics.confirmedReservations} of {autoMetrics.totalReservations} reservations
+                        </div>
+                      </Card>
+                      
+                      <Card className="bg-gradient-to-br from-purple-600 to-purple-700 rounded-2xl p-6 border-0 shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-105">
+                        <CardTitle className="font-bold text-lg text-white flex items-center gap-3">
+                          <div className="bg-white/20 p-2 rounded-lg">
+                            <CubeIcon className="h-6 w-6" />
+                          </div>
+                          <div>
+                            <div>Est. Revenue</div>
+                            <div className="text-xs font-normal text-purple-100">Daily Projection</div>
+                          </div>
+                        </CardTitle>
+                        <div className="text-4xl font-bold text-white mt-4">${autoMetrics.estimatedRevenue.toLocaleString()}</div>
+                        <div className="text-sm text-purple-100 mt-2 flex items-center gap-2">
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                          </svg>
+                          @ $35 avg per person
+                        </div>
+                      </Card>
                     </div>
-                  </Card>
-                  
-                  <Card className="bg-gradient-to-br from-blue-600 to-blue-700 rounded-2xl p-6 border-0 shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-105">
-                    <CardTitle className="font-bold text-lg text-white flex items-center gap-3">
-                      <div className="bg-white/20 p-2 rounded-lg">
-                        <CheckCircleIcon className="h-6 w-6" />
-                      </div>
-                      <div>
-                        <div>Confirmation Rate</div>
-                        <div className="text-xs font-normal text-blue-100">Booking Success</div>
-                      </div>
-                    </CardTitle>
-                    <div className="text-4xl font-bold text-white mt-4">{autoMetrics.reservationRate}%</div>
-                    <div className="text-sm text-blue-100 mt-2 flex items-center gap-2">
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                      </svg>
-                      {autoMetrics.confirmedReservations} of {autoMetrics.totalReservations} reservations
-                    </div>
-                  </Card>
-                  
-                  <Card className="bg-gradient-to-br from-purple-600 to-purple-700 rounded-2xl p-6 border-0 shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-105">
-                    <CardTitle className="font-bold text-lg text-white flex items-center gap-3">
-                      <div className="bg-white/20 p-2 rounded-lg">
-                        <CubeIcon className="h-6 w-6" />
-                      </div>
-                      <div>
-                        <div>Est. Revenue</div>
-                        <div className="text-xs font-normal text-purple-100">Daily Projection</div>
-                      </div>
-                    </CardTitle>
-                    <div className="text-4xl font-bold text-white mt-4">${autoMetrics.estimatedRevenue.toLocaleString()}</div>
-                    <div className="text-sm text-purple-100 mt-2 flex items-center gap-2">
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-                      </svg>
-                      @ $35 avg per person
-                    </div>
-                  </Card>
-                </div>
+                )}
                 
                 <div className="text-xs text-gray-400 mb-6 bg-gray-800/50 rounded-lg p-3">
                   <span className="font-medium">Note:</span> Live metrics auto-calculate from reservation data for {new Date(selectedDate + 'T00:00:00').toLocaleDateString()}.
-                  {autoMetrics.totalReservations === 0 ? (
+                  {autoMetrics?.totalReservations === 0 ? (
                     <div className="mt-2 text-amber-400 flex items-center gap-2">
                       <ExclamationTriangleIcon className="h-4 w-4" />
                       <strong>No reservations found for this date.</strong> Try selecting a different date with existing reservations.
                     </div>
-                  ) : (
+                  ) : autoMetrics?.totalReservations && autoMetrics.totalReservations > 0 ? (
                     <div className="mt-2 text-green-400 flex items-center gap-2">
                       <CheckCircleIcon className="h-4 w-4" />
                       Found {autoMetrics.totalReservations} reservation{autoMetrics.totalReservations !== 1 ? 's' : ''} for this date.
                     </div>
-                  )}
+                  ) : null}
                   <div className="mt-1">Use manual data entry below for precise financial tracking.</div>
                 </div>
               </div>
@@ -2676,7 +3426,7 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                   <div>
                     <label className="block text-base font-semibold mb-2 text-white flex items-center gap-2">
                       Daily Revenue ($)
-                      {autoMetrics.estimatedRevenue > 0 && (
+                      {autoMetrics?.estimatedRevenue && autoMetrics.estimatedRevenue > 0 && (
                         <span className="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded">
                           Est: ${autoMetrics.estimatedRevenue.toLocaleString()}
                         </span>
@@ -2687,7 +3437,7 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                       name="dailyRevenue" 
                       value={metrics.dailyRevenue} 
                       onChange={handleMetricChange} 
-                      placeholder={autoMetrics.estimatedRevenue > 0 ? `${autoMetrics.estimatedRevenue.toFixed(2)} (estimated)` : "0.00"}
+                      placeholder={autoMetrics?.estimatedRevenue && autoMetrics.estimatedRevenue > 0 ? `${autoMetrics.estimatedRevenue.toFixed(2)} (estimated)` : "0.00"}
                       min="0"
                       step="0.01"
                       className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-blue-500 focus:outline-none transition-colors" 
@@ -2746,7 +3496,7 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                   <div>
                     <label className="block text-base font-semibold mb-2 text-white flex items-center gap-2">
                       Daily Covers
-                      {autoMetrics.dailyCovers > 0 && (
+                      {autoMetrics?.dailyCovers && autoMetrics.dailyCovers > 0 && (
                         <span className="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded">
                           Auto: {autoMetrics.dailyCovers}
                         </span>
@@ -2757,7 +3507,7 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                       name="dailyCovers" 
                       value={metrics.dailyCovers} 
                       onChange={handleMetricChange} 
-                      placeholder={autoMetrics.dailyCovers > 0 ? `${autoMetrics.dailyCovers} (from reservations)` : "0"}
+                      placeholder={autoMetrics?.dailyCovers && autoMetrics.dailyCovers > 0 ? `${autoMetrics.dailyCovers} (from reservations)` : "0"}
                       min="0"
                       className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-cyan-500 focus:outline-none transition-colors" 
                     />
@@ -2785,7 +3535,7 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                   <div>
                     <label className="block text-base font-semibold mb-2 text-white flex items-center gap-2">
                       Reservation Rate (%)
-                      {autoMetrics.reservationRate > 0 && (
+                      {autoMetrics?.reservationRate && autoMetrics.reservationRate > 0 && (
                         <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded">
                           Auto: {autoMetrics.reservationRate}%
                         </span>
@@ -2797,7 +3547,7 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                       name="reservationRate" 
                       value={metrics.reservationRate} 
                       onChange={handleMetricChange} 
-                      placeholder={autoMetrics.reservationRate > 0 ? `${autoMetrics.reservationRate}% (from bookings)` : "0.0"}
+                      placeholder={autoMetrics?.reservationRate && autoMetrics.reservationRate > 0 ? `${autoMetrics.reservationRate}% (from bookings)` : "0.0"}
                       min="0"
                       max="100"
                       className="w-full px-4 py-3 rounded-lg bg-[#18181b] text-white text-lg border-2 border-gray-600 font-sans focus:border-pink-500 focus:outline-none transition-colors" 
@@ -3819,7 +4569,13 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                 </Button>
               </div>
 
-              {/* Staff Overview Cards */}
+              {/* Staff Sub-Nav */}
+              <div className="flex items-center gap-2 bg-[#1f1f25] rounded-lg p-1 w-full max-w-xl">
+                <button onClick={() => setStaffSubView('management')} className={`flex-1 text-sm font-medium px-4 py-2 rounded-md transition-colors cursor-pointer ${staffSubView === 'management' ? 'bg-teal-600 text-white' : 'text-gray-300 hover:bg-gray-700/50'}`}>Directory</button>
+                <button onClick={() => setStaffSubView('scheduling')} className={`flex-1 text-sm font-medium px-4 py-2 rounded-md transition-colors cursor-pointer ${staffSubView === 'scheduling' ? 'bg-teal-600 text-white' : 'text-gray-300 hover:bg-gray-700/50'}`}>Scheduling</button>
+              </div>
+
+              {/* Staff Overview Cards (always visible) */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 <Card className="bg-[#23232a] border-gray-700">
                   <CardContent className="p-4">
@@ -3872,8 +4628,8 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                 </Card>
               </div>
 
-              {/* Add Staff Form */}
-              {showAddStaffForm && (
+              {/* Add Staff Form (only in management view) */}
+              {staffSubView === 'management' && showAddStaffForm && (
                 <Card className="bg-[#23232a] border-gray-700 mb-6">
                   <CardHeader>
                     <CardTitle className="text-white flex items-center gap-2">
@@ -4046,7 +4802,8 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                 </Card>
               )}
 
-              {/* Staff List */}
+              {/* Staff Directory List */}
+              {staffSubView === 'management' && (
               <Card className="bg-[#23232a] border-gray-700">
                 <CardHeader>
                   <div className="flex items-center justify-between">
@@ -4319,8 +5076,375 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                   )}
                 </CardContent>
               </Card>
+              )}
+
+              {/* Scheduling View */}
+              {staffSubView === 'scheduling' && (
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xl font-semibold text-white flex items-center gap-2"><ClockIcon className="h-5 w-5" /> Scheduling</h3>
+                    <div className="flex gap-2 relative">
+                      <div className="flex bg-[#1d1d22] rounded-md overflow-hidden border border-gray-700">
+                        <button onClick={()=>setScheduleView('list')} className={`px-3 py-1.5 text-xs font-medium cursor-pointer ${scheduleView==='list' ? 'bg-teal-600 text-white' : 'text-gray-300 hover:bg-gray-700/60'}`}>List</button>
+                        <button onClick={()=>setScheduleView('calendar')} className={`px-3 py-1.5 text-xs font-medium cursor-pointer ${scheduleView==='calendar' ? 'bg-teal-600 text-white' : 'text-gray-300 hover:bg-gray-700/60'}`}>Week</button>
+                      </div>
+                      <Button onClick={refreshSchedulingData} variant="outline" className="border-gray-600 text-gray-300 hover:bg-gray-800 cursor-pointer" disabled={loadingSchedules}>{loadingSchedules ? 'Loading...' : 'Refresh'}</Button>
+                      {canManageScheduling && (
+                        <Button onClick={() => setShowAddScheduleForm(p => !p)} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white cursor-pointer">{showAddScheduleForm ? 'Close Form' : 'Add Shift'}</Button>
+                      )}
+                      <div className="relative">
+                        <button onClick={()=>setShowExportMenu(m=>!m)} className="px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-xs text-gray-200 cursor-pointer">Export</button>
+                        {showExportMenu && (
+                          <div className="absolute right-0 mt-1 w-44 bg-[#1d1d22] border border-gray-700 rounded shadow-lg z-30 overflow-hidden">
+                            <button onClick={()=>{exportWeekCSV(); setShowExportMenu(false);}} className="block w-full text-left px-3 py-2 text-[11px] text-gray-200 hover:bg-gray-700 cursor-pointer">CSV (Week)</button>
+                            <button onClick={()=>{printWeekSchedule(); setShowExportMenu(false);}} className="block w-full text-left px-3 py-2 text-[11px] text-gray-200 hover:bg-gray-700 cursor-pointer">Print / PDF</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  {/* Conflict & coverage summary */}
+                  {scheduleView === 'calendar' && (
+                    <div className="flex flex-wrap gap-4 text-xs text-gray-300 bg-[#1f1f25] rounded-md p-3 border border-gray-700">
+                      <div><span className="text-gray-400">Week:</span> {weekDays[0].toLocaleDateString()} - {weekDays[6].toLocaleDateString()}</div>
+                      <div><span className="text-gray-400">Shifts:</span> {weekShifts.length}</div>
+                      <div><span className="text-gray-400">Conflicts:</span> {conflictingShiftIds.size}</div>
+                      <div className="flex gap-2 items-center flex-wrap"><span className="text-gray-400">Coverage:</span>{roleCoverage.map(([r,c])=> {
+                        const target = roleTargets[r];
+                        const diff = target !== undefined ? c - target : null;
+                        const status = diff === null ? 'bg-gray-700' : diff < 0 ? 'bg-red-600/40 ring-1 ring-red-500' : 'bg-green-700/40 ring-1 ring-emerald-500';
+                        return <span key={r} className={`px-2 py-0.5 rounded-full ${status}`}>{r}:{c}{target!==undefined && <span className="ml-1 text-[10px] text-gray-300">({diff!>=0?'+':''}{diff})</span>}</span>;
+                      })}
+                        <button onClick={()=>setShowRoleTargets(s=>!s)} className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 cursor-pointer text-gray-200 text-[10px]">{showRoleTargets? 'Hide Targets':'Targets'}</button>
+                      </div>
+                      <div className="flex gap-2 items-end">
+                        <div className="flex flex-col">
+                          <label className="text-gray-400 mb-0.5">Staff</label>
+                          <select value={filterStaffId} onChange={e=>setFilterStaffId(e.target.value)} className="bg-[#121215] border border-gray-600 rounded px-2 py-1">
+                            <option value="">All</option>
+                            {staffMembers.map(sm => <option key={sm.id} value={sm.id}>{sm.first_name} {sm.last_name}</option>)}
+                          </select>
+                        </div>
+                        <div className="flex flex-col">
+                          <label className="text-gray-400 mb-0.5">Role</label>
+                          <select value={filterRole} onChange={e=>setFilterRole(e.target.value)} className="bg-[#121215] border border-gray-600 rounded px-2 py-1">
+                            <option value="">All</option>
+                            {Array.from(new Set(staffMembers.map(s=>s.role).filter(Boolean))).sort().map(r => <option key={r} value={r}>{r}</option>)}
+                          </select>
+                        </div>
+                        {(filterStaffId || filterRole) && <button onClick={()=>{setFilterStaffId(''); setFilterRole('');}} className="mt-4 h-7 px-2 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer">Clear</button>}
+                        <button onClick={()=>setShowAvailabilityPanel(p=>!p)} className="mt-4 h-7 px-2 rounded bg-gray-700 hover:bg-gray-600 cursor-pointer text-gray-200">{showAvailabilityPanel? 'Hide Avail' : 'Show Avail'}</button>
+                        {canManageScheduling && <button onClick={normalizeAvailability} className="mt-4 h-7 px-2 rounded bg-indigo-700 hover:bg-indigo-600 cursor-pointer text-gray-100" title="Set everyone 00:00-23:59 all week">Normalize Avail</button>}
+                      </div>
+                      <div className="ml-auto flex gap-1 items-center">
+                        <button onClick={goPrevWeek} className="p-1.5 rounded bg-gray-700 hover:bg-gray-600 cursor-pointer flex items-center justify-center" aria-label="Previous Week"><ChevronLeftIcon className="h-4 w-4 text-gray-200" /></button>
+                        <button onClick={goCurrentWeek} className="px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 cursor-pointer text-gray-200 text-xs font-medium">{isCurrentWeek ? 'This Week' : 'Go Current'}</button>
+                        <button onClick={goNextWeek} className="p-1.5 rounded bg-gray-700 hover:bg-gray-600 cursor-pointer flex items-center justify-center" aria-label="Next Week"><ChevronRightIcon className="h-4 w-4 text-gray-200" /></button>
+                      </div>
+                      <div className="w-full flex gap-3 items-center text-[10px] pt-2 border-t border-gray-700">
+                        <div className="flex items-center gap-1"><span className="w-2 h-2 bg-red-500 rounded-full" />Overlap</div>
+                        <div className="flex items-center gap-1"><span className="w-2 h-2 bg-amber-500 rounded-full" />Outside Availability</div>
+                        <div className="flex items-center gap-1"><span className="w-2 h-2 bg-red-600 rounded-full border border-red-300" />Time Off</div>
+                      </div>
+                      {showRoleTargets && (
+                        <div className="w-full bg-[#1d1d22] border border-gray-700 rounded p-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+                          {roleCoverage.map(([r]) => (
+                            <div key={r} className="flex flex-col text-[10px]">
+                              <label className="text-gray-300 mb-0.5">{r} target</label>
+                              <input type="number" min={0} value={roleTargets[r] ?? ''} onChange={e=>updateRoleTarget(r, e.target.value)} className="bg-[#121215] border border-gray-600 rounded px-2 py-1 text-gray-200" placeholder="#" />
+                            </div>
+                          ))}
+                          {roleCoverage.length===0 && <div className="text-gray-500 italic col-span-full">No roles to set targets yet.</div>}
+                          <div className="col-span-full text-[10px] text-gray-500">Targets persist in database (staff_role_targets).</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {scheduleView === 'calendar' && weeklyHours.length > 0 && (
+                    <div className="bg-[#1f1f25] rounded-md border border-gray-700 p-3 text-xs text-gray-300 flex flex-wrap gap-3">
+                      <div className="text-gray-400 font-medium w-full">Weekly Hours</div>
+                      {weeklyHours.map(w => (
+                        <div key={w.staff_id} className="px-2 py-1 rounded bg-gray-700/40">
+                          <span className="text-gray-200 font-semibold">{w.staff?.first_name} {w.staff?.last_name}</span>: {w.hours}h
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {scheduleView === 'calendar' && (
+                    <Card className="bg-[#23232a] border-gray-700">
+                      <CardHeader>
+                        <CardTitle className="text-white text-base">Week View</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        {showAvailabilityPanel && (
+                          <div className="mb-6 grid md:grid-cols-2 gap-6">
+                            <div className="bg-[#1d1d22] border border-gray-700 rounded p-4 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <h4 className="text-sm font-semibold text-white">Availability</h4>
+                                <select value={availabilityStaffId || ''} onChange={e=>setAvailabilityStaffId(e.target.value)} className="bg-[#121215] border border-gray-600 text-sm rounded px-2 py-1 text-gray-200">
+                                  {staffMembers.map(sm => <option key={sm.id} value={sm.id}>{sm.first_name} {sm.last_name}</option>)}
+                                </select>
+                              </div>
+                              <div className="space-y-2">
+                                {availability.map(row => {
+                                  const startVal = row.start_time || '';
+                                  const endVal = row.end_time || '';
+                                  return (
+                                    <div key={row.weekday} className="flex items-center gap-2 text-[11px]">
+                                      <span className="w-14 text-gray-400">{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][row.weekday]}</span>
+                                      <label className="flex items-center gap-1 cursor-pointer select-none">
+                                        <input type="checkbox" checked={!!row.is_available} onChange={e=>handleAvailabilityChange(row.weekday,'is_available',e.target.checked)} />
+                                        <span className="text-gray-300">Avail</span>
+                                      </label>
+                                      {row.is_available ? (
+                                        <>
+                                          <input type="time" value={startVal} onChange={e=>handleAvailabilityChange(row.weekday,'start_time',e.target.value || null)} className="bg-[#121215] border border-gray-600 rounded px-1 py-0.5" />
+                                          <span className="text-gray-500">-</span>
+                                          <input type="time" value={endVal} onChange={e=>handleAvailabilityChange(row.weekday,'end_time',e.target.value || null)} className="bg-[#121215] border border-gray-600 rounded px-1 py-0.5" />
+                                        </>
+                                      ) : <span className="italic text-gray-600">Off</span>}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <div className="flex justify-end">
+                                <button onClick={saveAvailability} disabled={loadingAvailability} className="px-3 py-1.5 rounded bg-teal-600 hover:bg-teal-700 text-white text-xs font-medium disabled:opacity-50 cursor-pointer">{loadingAvailability? 'Saving...' : 'Save'}</button>
+                              </div>
+                            </div>
+                            <div className="bg-[#1d1d22] border border-gray-700 rounded p-4 space-y-3">
+                              <h4 className="text-sm font-semibold text-white">Time Off</h4>
+                              <form onSubmit={addTimeOff} className="flex flex-wrap gap-2 items-end text-[11px]">
+                                <div className="flex flex-col">
+                                  <label className="text-gray-400 mb-0.5">Start</label>
+                                  <input name="start_date" type="date" required className="bg-[#121215] border border-gray-600 rounded px-2 py-1" />
+                                </div>
+                                <div className="flex flex-col">
+                                  <label className="text-gray-400 mb-0.5">End</label>
+                                  <input name="end_date" type="date" required className="bg-[#121215] border border-gray-600 rounded px-2 py-1" />
+                                </div>
+                                <div className="flex flex-col flex-1 min-w-[140px]">
+                                  <label className="text-gray-400 mb-0.5">Reason</label>
+                                  <input name="reason" type="text" placeholder="Vacation" className="bg-[#121215] border border-gray-600 rounded px-2 py-1" />
+                                </div>
+                                <button type="submit" className="px-3 py-1.5 rounded bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium cursor-pointer">Add</button>
+                              </form>
+                              <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
+                                {timeOff.length===0 && <div className="text-gray-500 text-[11px] italic">No time off</div>}
+                                {timeOff.map(t => (
+                                  <div key={t.id} className="text-[11px] flex items-center justify-between bg-gray-700/40 rounded px-2 py-1 gap-2">
+                                    <div className="flex flex-col flex-1 min-w-0">
+                                      <span className="text-gray-300 truncate">{t.start_date} → {t.end_date}</span>
+                                      {t.reason && <span className="text-gray-500 truncate">{t.reason}</span>}
+                                    </div>
+                                    <button onClick={() => handleDeleteTimeOff(t.id)} className="p-1 bg-gray-600 hover:bg-red-600 rounded cursor-pointer" title="Delete">
+                                      <TrashIcon className="h-3.5 w-3.5 text-gray-200" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        <div className="grid grid-cols-7 gap-2 text-xs">
+              {weekDays.map(day => {
+                            const iso = day.toISOString().slice(0,10);
+                            const dayShifts = weekShifts.filter(s => s.scheduled_date === iso);
+                            return (
+                <div key={iso} className={`flex flex-col bg-[#1d1d22] rounded border ${draggingShiftId ? 'border-teal-600/60' : 'border-gray-700'} min-h-[160px]`} onDragOver={handleDayDragOver} onDrop={(e)=>handleDayDrop(e, iso)}>
+                                <div className="px-2 py-1 border-b border-gray-700 text-gray-300 font-medium flex items-center justify-between">
+                                  <span>{day.toLocaleDateString(undefined,{weekday:'short'})}</span>
+                                  <span className="text-[10px] text-gray-500">{day.getDate()}</span>
+                                </div>
+                                <div className="flex-1 overflow-y-auto p-1 space-y-1">
+                                  {dayShifts.length === 0 && <div className="text-[10px] text-gray-500 italic">No shifts</div>}
+                  {dayShifts.map(shift => {
+                                    const conflict = conflictingShiftIds.has(shift.id);
+                                    return (
+                    <div key={shift.id} draggable onDragStart={(e)=>handleDragStart(e, shift.id)} onDragEnd={handleDragEnd} onDoubleClick={()=>openShiftModal(shift)} title="Double click to edit" className={`group relative rounded px-1.5 py-1 text-[10px] leading-tight cursor-move transition-colors ${draggingShiftId===shift.id ? 'opacity-40' : ''}
+                                        ${isShiftDuringTimeOff(shift) ? 'bg-red-700/40 hover:bg-red-700/50 ring-1 ring-red-500' : isShiftOutsideAvailability(shift) ? 'bg-amber-700/40 hover:bg-amber-700/50 ring-1 ring-amber-500' : 'bg-gray-700/50 hover:bg-gray-600/60'}
+                                        ${conflict && !isShiftDuringTimeOff(shift) ? 'ring-1 ring-red-500' : ''}`}> 
+                                        <div className="font-semibold text-gray-200 truncate">{shift.staff_members ? `${shift.staff_members.first_name} ${shift.staff_members.last_name}` : '—'}</div>
+                                        <div className="font-mono text-gray-300">{shift.start_time?.slice(0,5)}-{shift.end_time?.slice(0,5)}</div>
+                                        <div className="text-gray-400 truncate">{shift.position || shift.staff_members?.role || ''}</div>
+                                        {(conflict || isShiftOutsideAvailability(shift) || isShiftDuringTimeOff(shift)) && (
+                                          <div className="absolute top-0 right-0 mt-0.5 mr-0.5 flex gap-0.5">
+                                            {conflict && <span className="w-2 h-2 bg-red-500 rounded-full" title="Overlapping shift" />}
+                                            {isShiftOutsideAvailability(shift) && <span className="w-2 h-2 bg-amber-500 rounded-full" title="Outside availability" />}
+                                            {isShiftDuringTimeOff(shift) && <span className="w-2 h-2 bg-red-600 rounded-full border border-red-300" title="Time off" />}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {conflictingShiftIds.size > 0 && (
+                          <div className="mt-4 text-xs text-red-400">{conflictingShiftIds.size} overlapping shift{conflictingShiftIds.size>1?'s':''} detected. Consider adjusting times.</div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  )}
+                  {scheduleView === 'list' && (
+                  <div className="space-y-6">
+                  {canManageScheduling && showAddScheduleForm && (
+                    <Card className="bg-[#23232a] border-gray-700">
+                      <CardHeader>
+                        <CardTitle className="text-white text-base">Add Shift</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <form onSubmit={handleAddSchedule} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Staff Member</label>
+                            <select name="staff_id" required className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white">
+                              <option value="">Select...</option>
+                              {staffMembers.map(sm => (<option key={sm.id} value={sm.id}>{sm.first_name} {sm.last_name} - {sm.role}</option>))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Date</label>
+                            <input type="date" name="scheduled_date" required className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Start</label>
+                            <input type="time" name="start_time" required className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">End</label>
+                            <input type="time" name="end_time" required className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Position</label>
+                            <input type="text" name="position" className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white" placeholder="Server" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Station</label>
+                            <input type="text" name="station" className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white" placeholder="Main" />
+                          </div>
+                          <div className="md:col-span-2">
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Notes</label>
+                            <textarea name="notes" rows={2} className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white" />
+                          </div>
+                          <div className="md:col-span-2 flex gap-3">
+                            <button type="submit" className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded text-white text-sm font-medium cursor-pointer">Save</button>
+                            <button type="button" onClick={() => setShowAddScheduleForm(false)} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-gray-200 text-sm font-medium cursor-pointer">Cancel</button>
+                          </div>
+                        </form>
+                      </CardContent>
+                    </Card>
+                  )}
+                  <Card className="bg-[#23232a] border-gray-700">
+                    <CardHeader>
+                      <CardTitle className="text-white text-base flex items-center gap-2"><ClockIcon className="h-4 w-4" /> Upcoming Shifts</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {loadingSchedules && <div className="text-gray-400 text-sm">Loading schedules...</div>}
+                      {!loadingSchedules && filteredSchedules.length === 0 && <div className="text-gray-400 text-sm">No shifts match current filters.</div>}
+                      {!loadingSchedules && filteredSchedules.length > 0 && (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left border-b border-gray-700 text-gray-300">
+                                <th className="py-2 pr-4">Employee</th>
+                                <th className="py-2 pr-4">Date</th>
+                                <th className="py-2 pr-4">Start</th>
+                                <th className="py-2 pr-4">End</th>
+                                <th className="py-2 pr-4">Position</th>
+                                <th className="py-2 pr-4">Station</th>
+                                <th className="py-2 pr-4">Status</th>
+                                <th className="py-2 pr-4">Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filteredSchedules.map(s => (
+                                <tr key={s.id} className="border-b border-gray-800 hover:bg-[#2a2a31] transition-colors">
+                                  <td className="py-2 pr-4 text-gray-200">{s.staff_members ? `${s.staff_members.first_name} ${s.staff_members.last_name}` : '-'}</td>
+                                  <td className="py-2 pr-4 text-gray-200">{new Date(s.scheduled_date + 'T00:00:00').toLocaleDateString()}</td>
+                                  <td className="py-2 pr-4 text-gray-300 font-mono">{s.start_time?.slice(0,5)}</td>
+                                  <td className="py-2 pr-4 text-gray-300 font-mono">{s.end_time?.slice(0,5)}</td>
+                                  <td className="py-2 pr-4 text-gray-300">{s.position || '-'}</td>
+                                  <td className="py-2 pr-4 text-gray-300">{s.station || '-'}</td>
+                                  <td className="py-2 pr-4">
+                                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                      s.status === 'scheduled' ? 'bg-blue-500/20 text-blue-300' :
+                                      s.status === 'confirmed' ? 'bg-green-500/20 text-green-300' :
+                                      s.status === 'cancelled' ? 'bg-red-500/20 text-red-300' :
+                                      s.status === 'completed' ? 'bg-emerald-500/20 text-emerald-300' :
+                                      'bg-gray-500/20 text-gray-300'
+                                    }`}>{s.status}</span>
+                                  </td>
+                                  <td className="py-2 pr-4">
+                                    <div className="flex gap-2">
+                                      {canManageScheduling && <button onClick={() => handleEditSchedule(s)} className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 cursor-pointer">Edit</button>}
+                                      {canManageScheduling && <button onClick={() => handleDeleteSchedule(s.id)} className="text-xs px-2 py-1 rounded bg-red-700/70 hover:bg-red-700 text-red-100 cursor-pointer">Del</button>}
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                  {scheduleView === 'list' && editingSchedule && editingScheduleData && canManageScheduling && (
+                    <Card id="schedule-edit-form" className="bg-[#23232a] border-gray-700">
+                      <CardHeader>
+                        <CardTitle className="text-white text-base">Edit Shift</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <form onSubmit={handleUpdateSchedule} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Date</label>
+                            <input type="date" value={editingScheduleData.scheduled_date || ''} onChange={e => handleScheduleDataChange('scheduled_date', e.target.value)} required className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Start</label>
+                            <input type="time" value={editingScheduleData.start_time || ''} onChange={e => handleScheduleDataChange('start_time', e.target.value)} required className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">End</label>
+                            <input type="time" value={editingScheduleData.end_time || ''} onChange={e => handleScheduleDataChange('end_time', e.target.value)} required className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Position</label>
+                            <input type="text" value={editingScheduleData.position || ''} onChange={e => handleScheduleDataChange('position', e.target.value)} className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Station</label>
+                            <input type="text" value={editingScheduleData.station || ''} onChange={e => handleScheduleDataChange('station', e.target.value)} className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Status</label>
+                            <select value={editingScheduleData.status || 'scheduled'} onChange={e => handleScheduleDataChange('status', e.target.value)} className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white">
+                              <option value="scheduled">Scheduled</option>
+                              <option value="confirmed">Confirmed</option>
+                              <option value="completed">Completed</option>
+                              <option value="cancelled">Cancelled</option>
+                              <option value="no_show">No Show</option>
+                            </select>
+                          </div>
+                          <div className="md:col-span-2">
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Notes</label>
+                            <textarea value={editingScheduleData.notes || ''} onChange={e => handleScheduleDataChange('notes', e.target.value)} rows={2} className="w-full bg-[#1d1d22] border border-gray-600 rounded px-3 py-2 text-sm text-white" />
+                          </div>
+                          <div className="md:col-span-2 flex gap-3">
+                            <button type="submit" className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded text-white text-sm font-medium cursor-pointer">Update</button>
+                            <button type="button" onClick={handleCancelScheduleEdit} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-gray-200 text-sm font-medium cursor-pointer">Cancel</button>
+                          </div>
+                        </form>
+                      </CardContent>
+                    </Card>
+                  )}
+                  </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
+
 
           {/* Settings Section */}
           {activeSection === "settings" && (
@@ -4518,6 +5642,33 @@ CREATE POLICY "Users can manage their own metrics" ON public.daily_metrics
                 Save Changes
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inline Shift Modal */}
+      {showShiftModal && shiftModalData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onMouseDown={(e)=>{ if(e.target===e.currentTarget) closeShiftModal(); }}>
+          <div className="w-full max-w-md bg-[#23232a] border border-gray-700 rounded-lg shadow-lg relative" onMouseDown={e=>e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
+              <h4 className="text-white text-sm font-semibold">Edit Shift</h4>
+              <button onClick={closeShiftModal} className="text-gray-400 hover:text-gray-200 text-sm">✕</button>
+            </div>
+            <form onSubmit={saveShiftModal} className="p-4 space-y-3 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="flex flex-col gap-1"><span className="text-gray-400">Date</span><input type="date" value={shiftModalData.scheduled_date||''} onChange={e=>handleShiftModalChange('scheduled_date', e.target.value)} className="bg-[#121215] border border-gray-600 rounded px-2 py-1 text-gray-200" required /></label>
+                <label className="flex flex-col gap-1"><span className="text-gray-400">Status</span><select value={shiftModalData.status||'scheduled'} onChange={e=>handleShiftModalChange('status', e.target.value)} className="bg-[#121215] border border-gray-600 rounded px-2 py-1 text-gray-200"><option value="scheduled">Scheduled</option><option value="confirmed">Confirmed</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option><option value="no_show">No Show</option></select></label>
+                <label className="flex flex-col gap-1"><span className="text-gray-400">Start</span><input type="time" value={shiftModalData.start_time||''} onChange={e=>handleShiftModalChange('start_time', e.target.value)} className="bg-[#121215] border border-gray-600 rounded px-2 py-1 text-gray-200" required /></label>
+                <label className="flex flex-col gap-1"><span className="text-gray-400">End</span><input type="time" value={shiftModalData.end_time||''} onChange={e=>handleShiftModalChange('end_time', e.target.value)} className="bg-[#121215] border border-gray-600 rounded px-2 py-1 text-gray-200" required /></label>
+                <label className="flex flex-col gap-1 col-span-2"><span className="text-gray-400">Position</span><input type="text" value={shiftModalData.position||''} onChange={e=>handleShiftModalChange('position', e.target.value)} className="bg-[#121215] border border-gray-600 rounded px-2 py-1 text-gray-200" /></label>
+                <label className="flex flex-col gap-1 col-span-2"><span className="text-gray-400">Station</span><input type="text" value={shiftModalData.station||''} onChange={e=>handleShiftModalChange('station', e.target.value)} className="bg-[#121215] border border-gray-600 rounded px-2 py-1 text-gray-200" /></label>
+                <label className="flex flex-col gap-1 col-span-2"><span className="text-gray-400">Notes</span><textarea value={shiftModalData.notes||''} onChange={e=>handleShiftModalChange('notes', e.target.value)} rows={2} className="bg-[#121215] border border-gray-600 rounded px-2 py-1 text-gray-200" /></label>
+              </div>
+              <div className="flex justify-end gap-2 pt-1">
+                <button type="button" onClick={closeShiftModal} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-gray-200 cursor-pointer">Cancel</button>
+                <button type="submit" className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 rounded text-white cursor-pointer">Save</button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { AuthProvider, useAuth } from "@/lib/authContext";
 import AuthForm from "@/components/AuthForm";
@@ -21,6 +21,8 @@ function HomeContent() {
   const { profile, loading, session } = useAuth();
   const [userReservations, setUserReservations] = useState<UserReservation[]>([]);
   const [reservationsLoading, setReservationsLoading] = useState(false);
+  const signInDetailsRef = useRef<HTMLDetailsElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Effect to fetch reservations when a user is logged in
   useEffect(() => {
@@ -83,7 +85,11 @@ function HomeContent() {
             style={{ backgroundImage: 'url(/images/HostMateBG.jpg)' }}
           ></div>
           
-          <div className="w-full absolute inset-0 overflow-y-auto flex flex-col items-center justify-start p-8 pt-20 pb-20 gap-8 sm:p-20 sm:pt-32" style={{ scrollbarGutter: 'stable' }}>
+          <div
+            className="w-full absolute inset-0 overflow-y-auto flex flex-col items-center justify-start p-8 pt-20 pb-20 gap-8 sm:p-20 sm:pt-32"
+            style={{ scrollbarGutter: 'stable' }}
+            ref={scrollContainerRef}
+          >
             <main className="flex flex-col gap-8 items-center relative z-10 w-full max-w-4xl">
               
               <div className="text-center mb-4">
@@ -123,9 +129,33 @@ function HomeContent() {
               {/* Hide sign-in form if user is already logged in */}
               {!session && (
                 <div className="text-center">
-                  <details className="group">
+                  <details
+                    className="group"
+                    ref={signInDetailsRef}
+                    onToggle={e => {
+                      const details = signInDetailsRef.current;
+                      if (details) {
+                        if (details.open) {
+                          // Scroll to center when opening
+                          setTimeout(() => {
+                            details.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          }, 100);
+                        } else {
+                          // Scroll back up when closing
+                          setTimeout(() => {
+                            if (scrollContainerRef.current) {
+                              scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+                            }
+                          }, 100);
+                        }
+                      }
+                    }}
+                  >
                     <summary className="cursor-pointer text-purple-400 hover:text-purple-300 transition-colors list-none">
-                      <span className="text-sm">Already have an account? Sign in to see your reservations ▼</span>
+                      <span className="text-sm">
+                        Already have an account? Sign in to see your reservations
+                        <span className="inline-block transition-transform duration-200 group-open:rotate-180 ml-1">▼</span>
+                      </span>
                     </summary>
                     <div className="mt-4 group-open:animate-fadeIn">
                       <AuthForm />

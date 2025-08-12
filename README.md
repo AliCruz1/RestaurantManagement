@@ -1,36 +1,75 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## HostMate — Reservations + Chat Agent
 
-## Getting Started
+Production-ready Next.js app with a natural-language reservation assistant, Supabase backend, and safe secret handling for public repos.
 
-First, run the development server:
+## Quick start
+
+1) Copy env template and fill values locally (do NOT commit real keys):
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Required envs (see .env.example):
+- NEXT_PUBLIC_SUPABASE_URL
+- NEXT_PUBLIC_SUPABASE_ANON_KEY
+- NEXT_PUBLIC_BASE_URL (optional; defaults to http://localhost:3000)
+- SUPABASE_SERVICE_ROLE_KEY (server only)
+- GEMINI_API_KEY (server only)
+- EMAIL_PROCESSOR_API_KEY (if using email queue route)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+2) Install and run dev:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm install
+npm run dev
+```
 
-## Learn More
+Open http://localhost:3000.
 
-To learn more about Next.js, take a look at the following resources:
+## Safe secrets in a public repo
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- .gitignore is configured to ignore all .env files; only .env.example is tracked.
+- Never commit real secrets. Use .env.local for development only.
+- The API route reads server-only keys from process.env (e.g., GEMINI_API_KEY). Client-side Supabase uses NEXT_PUBLIC_ vars.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### If you accidentally committed .env.local
 
-## Deploy on Vercel
+1) Remove the file and untrack it:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+git rm --cached .env.local
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+2) Rotate keys (Supabase anon + service role, Gemini) in their respective dashboards.
+
+3) Force-purge from history (optional, if the repo was public):
+
+```bash
+git filter-repo --path .env.local --invert-paths
+git push --force
+```
+
+Alternatively use BFG Repo-Cleaner.
+
+## Deploy
+
+Vercel (recommended):
+- Import the repo into Vercel
+- In Project Settings → Environment Variables, set:
+	- NEXT_PUBLIC_SUPABASE_URL
+	- NEXT_PUBLIC_SUPABASE_ANON_KEY
+	- NEXT_PUBLIC_BASE_URL (e.g., https://your-vercel-domain.vercel.app)
+	- SUPABASE_SERVICE_ROLE_KEY
+	- GEMINI_API_KEY
+	- EMAIL_PROCESSOR_API_KEY (if using email queue)
+- Redeploy. Do not add these to the repo.
+
+Supabase:
+- Create a project, copy URL and ANON key to envs above
+- Service Role key is required only for server functions that need elevated access
+
+## Notes
+
+- The agent gracefully falls back to static Q&A if GEMINI_API_KEY is not set (reservation parsing still works).
+- All reservation creations go through a server route; no secrets are exposed to the browser.
