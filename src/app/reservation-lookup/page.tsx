@@ -1,9 +1,13 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 
-export default function ReservationLookup() {
+// Ensure this page is rendered dynamically to avoid static prerender issues
+export const dynamic = "force-dynamic";
+
+function ReservationLookupInner() {
   const [email, setEmail] = useState("");
   const [reservationToken, setReservationToken] = useState("");
   const [reservation, setReservation] = useState<any>(null);
@@ -232,11 +236,20 @@ export default function ReservationLookup() {
         )}
         
         <div className="text-center mt-8">
-          <a href="/" className="text-purple-400 hover:text-purple-300 underline">
+          <Link href="/" className="text-purple-400 hover:text-purple-300 underline">
             ← Back to Restaurant Homepage
-          </a>
+          </Link>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ReservationLookup() {
+  // Wrap client-side searchParams usage in Suspense to satisfy Next.js requirement
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#18181b] text-white p-8">Loading…</div>}>
+      <ReservationLookupInner />
+    </Suspense>
   );
 }
